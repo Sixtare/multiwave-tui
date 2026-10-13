@@ -8,8 +8,8 @@ pub fn update(app: &mut App, key_event: KeyEvent) {
         KeyCode::Char('c') | KeyCode::Char('C') if key_event.modifiers == KeyModifiers::CONTROL => {
             app.quit()
         }
-        KeyCode::Right | KeyCode::Char('j') => app.increment_counter(),
-        KeyCode::Left | KeyCode::Char('k') => app.decrement_counter(),
+        KeyCode::Right | KeyCode::Char('l') => app.increment_counter(),
+        KeyCode::Left | KeyCode::Char('j') => app.decrement_counter(),
         _ => {}
     };
 }
