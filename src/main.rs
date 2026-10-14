@@ -36,7 +36,7 @@ fn main() -> Result<()> {
         tui.draw(&mut app)?;
         // Handle events.
         match tui.events.next()? {
-            Event::Tick => {}
+            Event::Tick => app.increment_tick_counter(),
             Event::Key(key_event) => update(&mut app, key_event),
             Event::Mouse(_) => {}
             Event::Resize(_, _) => {}

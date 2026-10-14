@@ -4,6 +4,8 @@ pub struct App {
     pub should_quit: bool,
     /// counter
     pub counter: u8,
+    // tick counter
+    pub tick_counter: u64,
 }
 
 impl App {
@@ -30,6 +32,10 @@ impl App {
         if let Some(res) = self.counter.checked_sub(1) {
             self.counter = res;
         }
+    }
+
+    pub fn increment_tick_counter(&mut self){
+        self.tick_counter += 1;
     }
 }
 
