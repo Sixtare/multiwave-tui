@@ -26,7 +26,7 @@ fn main() -> Result<()> {
     // Initialize the terminal user interface.
     let backend = CrosstermBackend::new(std::io::stderr());
     let terminal = Terminal::new(backend)?;
-    let events = EventHandler::new(250);
+    let events = EventHandler::new(13);
     let mut tui = Tui::new(terminal, events);
     tui.enter()?;
 

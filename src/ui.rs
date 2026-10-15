@@ -5,18 +5,24 @@ use ratatui::{
 use crate::app::App;
 
 pub fn render(app: &mut App, frame: &mut Frame) {
-    render_paragraph(app, frame);
-    //render_bars(frame);  
     
-    let vertical = Layout::vertical([Constraint::Percentage(30), Constraint::Fill(1)]).spacing(1);
-    let horizontal = Layout::horizontal([Constraint::Length(1), Constraint::Fill(1)]).spacing(1);
-    let [top, main] = frame.area().layout(&vertical);
-    let [left, right] = main.layout(&horizontal);
+    let vertical = Layout::vertical([
+        Constraint::Percentage(30), 
+        Constraint::Percentage(70)]);
 
-    draw_demo_soundwave(frame, right, app.tick_counter);
+    let horizontal = Layout::horizontal([
+        Constraint::Percentage(5), 
+        Constraint::Percentage(90),
+        Constraint::Percentage(5)]);
+    
+    let [top, bottom] = frame.area().layout(&vertical);
+    let [left, middle, right] = bottom.layout(&horizontal);
+
+    render_paragraph(app, frame, top);
+    draw_demo_soundwave(frame, middle, app.tick_counter);
 }
 
-fn render_paragraph(app: &mut App, frame: &mut Frame){
+fn render_paragraph(app: &mut App, frame: &mut Frame, top_rect: Rect){
     frame.render_widget(
         Paragraph::new(format!(
             "
@@ -36,24 +42,8 @@ fn render_paragraph(app: &mut App, frame: &mut Frame){
         )
         .style(Style::default().fg(Color::Yellow))
         .alignment(Alignment::Center),
-        frame.area(),
+        top_rect,
     ); 
-}
-
-fn render_bars(frame: &mut Frame){
-    let vertical = Layout::vertical([Constraint::Percentage(30), Constraint::Fill(1)]).spacing(1);
-    let horizontal = Layout::horizontal([Constraint::Length(1), Constraint::Fill(1)]).spacing(1);
-    let [top, main] = frame.area().layout(&vertical);
-    let [left, right] = main.layout(&horizontal);
-
-    let mut bars: Vec<Bar<'_>> = vec![];
-
-    for _ in 0..32 {
-        bars.push(Bar::with_label("", 10).yellow());
-    }
-    bars.push(Bar::default().value_style(Style::default().fg(Color::Black)).value(10));
-    let chart = BarChart::vertical(bars).bar_width(3);
-    frame.render_widget(chart, right);
 }
 
 const WAVE_CHARS: &[char] = &[' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -77,7 +67,7 @@ fn render_soundwave(amplitudes: &[f32]) -> Line<'static> {
 
 pub fn draw_demo_soundwave(f: &mut Frame, area: Rect, tick: u64) {
     // 1. Simulação de 16 barras de áudio usando a função seno para criar um efeito de onda fluida
-    let num_bars = 16;
+    let num_bars = 32;
     let mut mock_amplitudes = vec![0.0; num_bars];
 
     for (i, amp) in mock_amplitudes.iter_mut().enumerate() {
@@ -96,7 +86,10 @@ pub fn draw_demo_soundwave(f: &mut Frame, area: Rect, tick: u64) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Equalizador (Demonstração) ")
-        );
+                .title_alignment(Alignment::Center)
+                
+        )
+        .alignment(Alignment::Center);
 
     // 4. Renderiza na tela
     f.render_widget(soundwave_widget, area);
