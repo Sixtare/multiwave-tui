@@ -104,13 +104,6 @@ pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32]) {
     let wave_lines = render_soundwave(bars, rows);
 
     let soundwave_widget = Paragraph::new(wave_lines)
-        .block(
-            Block::default()
-                .title(" Equalizador de Frequências ")
-                .title_alignment(Alignment::Center)
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
-        )
         .alignment(Alignment::Center);
 
     let chunks = Layout::default()
