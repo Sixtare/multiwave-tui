@@ -10,6 +10,9 @@ pub mod ui;
 /// Terminal user interface.
 pub mod tui;
 
+// Get sound device.
+pub mod sound_device;
+
 /// Application updater.
 pub mod update;
 use app::App;
@@ -19,9 +22,15 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tui::Tui;
 use update::update;
 
+use crate::sound_device::SoundDevice;
+
 fn main() -> Result<()> {
     // Create an application.
     let mut app = App::new();
+
+    // Initializing sound device capture
+    let sound_device = SoundDevice::new();
+
 
     // Initialize the terminal user interface.
     let backend = CrosstermBackend::new(std::io::stderr());
