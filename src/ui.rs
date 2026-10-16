@@ -31,7 +31,7 @@ fn render_mirrored_soundwave(
         return lines;
     }
 
-    // 1. Visualizador Superior (cresce para cima a partir da linha central)
+    // 1. Visualizador Superior (cresce para cima a partir da linha central até o topo da tela)
     for row in (0..upper_rows).rev() {
         let mut spans = Vec::new();
         let threshold = row as f32 / upper_rows as f32;
@@ -67,14 +67,14 @@ fn render_mirrored_soundwave(
         lines.push(Line::from(spans));
     }
 
-    // 2. Linha divisória central sutil (horizonte do espelho)
+    // 2. Linha divisória central sutil (horizonte do espelho no centro da tela)
     let divider_spans: Vec<Span<'static>> = vec![Span::styled(
         "──".repeat(amplitudes.len()),
         Style::default().fg(Color::DarkGray),
     )];
     lines.push(Line::from(divider_spans));
 
-    // 3. Efeito Espelho / Mirror (de cabeça para baixo, cresce para baixo)
+    // 3. Efeito Espelho / Mirror (de cabeça para baixo, cresce até o fundo da tela)
     for row in 0..mirror_rows {
         let mut spans = Vec::new();
         let threshold = row as f32 / mirror_rows as f32;
@@ -116,26 +116,30 @@ fn render_mirrored_soundwave(
 }
 
 pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32]) {
-    // Sem blocos ou bordas, aproveitamos a altura total disponível na tela
     let available_height = area.height as usize;
+    if available_height < 3 {
+        return;
+    }
 
-    // Proporção harmônica de altura: ~55% superior, 1 linha central, ~40% espelho inferior
+    // Reserva 1 linha para o horizonte/divisor central
     let usable_lines = available_height.saturating_sub(1);
-    let upper_rows = ((usable_lines * 55) / 100).clamp(3, 16);
-    let mirror_rows = ((usable_lines * 40) / 100).clamp(2, 12);
+
+    // Divisão simétrica completa: sem limite artificial de clamp.
+    // A linha divisória fica fixada no meio exato da tela e as barras
+    // utilizam 100% da altura vertical disponível (subindo até o topo e descendo até a base).
+    let upper_rows = usable_lines / 2;
+    let mirror_rows = usable_lines / 2;
     let content_lines = upper_rows + 1 + mirror_rows;
 
     let wave_lines = render_mirrored_soundwave(bars, upper_rows, mirror_rows);
-
     let soundwave_widget = Paragraph::new(wave_lines).alignment(Alignment::Center);
 
-    // Centraliza perfeitamente o visualizador no centro vertical da tela
-    let widget_height = (content_lines as u16).min(area.height);
+    // Centraliza verticalmente preenchendo a tela inteira
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Fill(1),
-            Constraint::Length(widget_height),
+            Constraint::Length(content_lines as u16),
             Constraint::Fill(1),
         ])
         .split(area);
