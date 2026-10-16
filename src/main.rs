@@ -58,7 +58,7 @@ fn main() -> Result<()> {
         // Aguarda e processa o próximo evento
         match tui.events.next()? {
             Event::Tick => {
-                app.increment_tick_counter();
+                app.tick();
             }
             Event::Key(key_event) => {
                 update(&mut app, key_event);

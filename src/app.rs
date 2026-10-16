@@ -6,10 +6,16 @@ pub struct App {
     pub counter: u8,
     /// tick counter
     pub tick_counter: u64,
-    /// Vetor com as magnitudes normalizadas das barras de áudio (0.0 a 1.0)
+    /// Vetor com as magnitudes normalizadas e suavizadas das barras de áudio (0.0 a 1.0)
     pub audio_bars: Vec<f32>,
+    /// Vetor com os valores alvo recebidos mais recentemente da FFT
+    pub target_bars: Vec<f32>,
     /// Ganho de sensibilidade para a visualização
     pub gain: f32,
+    /// Fator de subida (Attack): resposta rápida e amortecida
+    pub attack_factor: f32,
+    /// Fator de queda (Decay): decaimento gradual e fluido
+    pub decay_factor: f32,
 }
 
 impl Default for App {
@@ -19,7 +25,10 @@ impl Default for App {
             counter: 0,
             tick_counter: 0,
             audio_bars: vec![0.0; 32],
+            target_bars: vec![0.0; 32],
             gain: 1.0,
+            attack_factor: 0.65,
+            decay_factor: 0.20,
         }
     }
 }
@@ -30,8 +39,15 @@ impl App {
         Self::default()
     }
 
-    /// Handles the tick event of the terminal.
-    pub fn tick(&self) {}
+    /// Executa um ciclo de animação a cada tick (~60 FPS)
+    pub fn tick(&mut self) {
+        self.tick_counter += 1;
+        // Puxa gradualmente os alvos para baixo para esmaecimento natural do som
+        for target in &mut self.target_bars {
+            *target = (*target * 0.94).max(0.0);
+        }
+        self.apply_smoothing();
+    }
 
     /// Set should_quit to true to quit the application.
     pub fn quit(&mut self) {
@@ -49,14 +65,35 @@ impl App {
             self.counter = res;
         }
     }
+    /// Atualiza as barras de áudio recebidas da FFT e aplica suavização
+    pub fn update_audio_bars(&mut self, bars: Vec<f32>) {
+        if self.audio_bars.len() != bars.len() {
+            self.audio_bars = bars.clone();
+            self.target_bars = bars;
+            return;
+        }
 
-    pub fn increment_tick_counter(&mut self) {
-        self.tick_counter += 1;
+        self.target_bars = bars;
+        self.apply_smoothing();
     }
 
-    /// Atualiza as barras de áudio recebidas da FFT
-    pub fn update_audio_bars(&mut self, bars: Vec<f32>) {
-        self.audio_bars = bars;
+    /// Aplica interpolação suave (Attack / Decay) para evitar saltos visuais bruscos
+    pub fn apply_smoothing(&mut self) {
+        for (current, &target) in self.audio_bars.iter_mut().zip(self.target_bars.iter()) {
+            if target > *current {
+                // Subida: interpolação rápida em direção ao alvo
+                *current += (target - *current) * self.attack_factor;
+            } else {
+                // Queda: decaimento gradual e elástico
+                *current -= (*current - target) * self.decay_factor;
+            }
+
+            if *current < 0.005 {
+                *current = 0.0;
+            } else if *current > 1.0 {
+                *current = 1.0;
+            }
+        }
     }
 
     /// Aumenta a sensibilidade/ganho da visualização
@@ -97,12 +134,24 @@ mod tests {
     }
 
     #[test]
-    fn test_app_update_audio_bars() {
+    fn test_app_update_audio_bars_smoothing() {
         let mut app = App::default();
-        let new_bars = vec![0.5; 32];
+        // Inicializa com 0.0
+        assert_eq!(app.audio_bars[0], 0.0);
+
+        // Envia pico abrupto de 1.0
+        let new_bars = vec![1.0; 32];
         app.update_audio_bars(new_bars);
-        assert_eq!(app.audio_bars.len(), 32);
-        assert_eq!(app.audio_bars[0], 0.5);
+
+        // A barra não deve pular instantaneamente para 1.0, mas sim subir suavemente
+        assert!(app.audio_bars[0] > 0.5 && app.audio_bars[0] < 1.0);
+
+        // Quando o alvo cai para 0.0
+        let zero_bars = vec![0.0; 32];
+        app.update_audio_bars(zero_bars);
+
+        // A barra deve descer gradualmente sem despencar de vez para 0.0
+        assert!(app.audio_bars[0] > 0.0);
     }
 
     #[test]
