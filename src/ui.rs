@@ -3,82 +3,53 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
 use crate::app::App;
 
 pub fn render(app: &mut App, frame: &mut Frame) {
-    let vertical = Layout::vertical([
-        Constraint::Percentage(25),
-        Constraint::Percentage(75),
-    ]);
-
-    let horizontal = Layout::horizontal([
-        Constraint::Percentage(5),
-        Constraint::Percentage(90),
-        Constraint::Percentage(5),
-    ]);
-
-    let [top, bottom] = frame.area().layout(&vertical);
-    let [_left, middle, _right] = bottom.layout(&horizontal);
-
-    render_paragraph(app, frame, top);
-    draw_soundwave(frame, middle, &app.displayed_bars());
+    // Utiliza a tela inteira, centralizando o visualizador vertical e horizontalmente
+    draw_soundwave(frame, frame.area(), &app.displayed_bars());
 }
 
-fn render_paragraph(app: &mut App, frame: &mut Frame, top_rect: Rect) {
-    frame.render_widget(
-        Paragraph::new(format!(
-            "Pressione `Esc`, `Ctrl-C` ou `q` para sair.\n\
-             Pressione `j` e `l` para alterar o contador.\n\
-             Pressione `i` e `k` para aumentar ou diminuir a sensibilidade (Ganho: {:.2}x).\n\
-             Contador: {}",
-            app.gain, app.counter
-        ))
-        .block(
-            Block::default()
-                .title(" Visualizador de Áudio em Tempo Real (CPAL + RealFFT) ")
-                .title_alignment(Alignment::Center)
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
-        )
-        .style(Style::default().fg(Color::Yellow))
-        .alignment(Alignment::Center),
-        top_rect,
-    );
-}
-
+// Caracteres para as barras superiores (ancoradas na base)
 const WAVE_CHARS: &[char] = &[' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
-fn render_soundwave(amplitudes: &[f32], total_rows: usize) -> Vec<Line<'static>> {
+// Caracteres para o espelho inferior (ancorados no topo / de cabeça para baixo)
+const INVERTED_WAVE_CHARS: &[char] = &[' ', '▔', '▀', '█'];
+
+/// Renderiza as barras normais (para cima) combinadas com o efeito de espelho (de cabeça para baixo).
+fn render_mirrored_soundwave(
+    amplitudes: &[f32],
+    upper_rows: usize,
+    mirror_rows: usize,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
-    if total_rows == 0 {
+    if upper_rows == 0 && mirror_rows == 0 {
         return lines;
     }
 
-    // Percorre de cima para baixo (da linha mais alta até a base da caixa)
-    for row in (0..total_rows).rev() {
+    // 1. Visualizador Superior (cresce para cima a partir da linha central)
+    for row in (0..upper_rows).rev() {
         let mut spans = Vec::new();
-        // Define o limiar percentual de altura que esta linha representa (0.0 no chão, 1.0 no topo)
-        let threshold = row as f32 / total_rows as f32;
+        let threshold = row as f32 / upper_rows as f32;
 
         for (i, &amp) in amplitudes.iter().enumerate() {
             let normalized = amp.clamp(0.0, 1.0);
 
-            // Calcula qual caractere usar com base na altura da barra e na linha atual
-            let character = if normalized >= threshold + (1.0 / total_rows as f32) {
+            let character = if normalized >= threshold + (1.0 / upper_rows as f32) {
                 '█'
             } else if normalized >= threshold {
-                let fractional = (normalized - threshold) * total_rows as f32;
+                let fractional = (normalized - threshold) * upper_rows as f32;
                 let char_index = (fractional * (WAVE_CHARS.len() - 1) as f32).round() as usize;
                 WAVE_CHARS[char_index.clamp(0, WAVE_CHARS.len() - 1)]
             } else {
-                ' ' // Vazio acima da barra
+                ' '
             };
 
-            // Gradiente de cor por frequência (graves ciano -> médios verde -> agudos magenta)
+            // Gradiente vibrante: graves ciano -> médios verde -> agudos magenta
             let color = if i < amplitudes.len() / 3 {
                 Color::Cyan
             } else if i < (amplitudes.len() * 2) / 3 {
@@ -96,21 +67,76 @@ fn render_soundwave(amplitudes: &[f32], total_rows: usize) -> Vec<Line<'static>>
         lines.push(Line::from(spans));
     }
 
+    // 2. Linha divisória central sutil (horizonte do espelho)
+    let divider_spans: Vec<Span<'static>> = vec![Span::styled(
+        "──".repeat(amplitudes.len()),
+        Style::default().fg(Color::DarkGray),
+    )];
+    lines.push(Line::from(divider_spans));
+
+    // 3. Efeito Espelho / Mirror (de cabeça para baixo, cresce para baixo)
+    for row in 0..mirror_rows {
+        let mut spans = Vec::new();
+        let threshold = row as f32 / mirror_rows as f32;
+
+        for (i, &amp) in amplitudes.iter().enumerate() {
+            // Leve atenuação no reflexo para um efeito mais realista de espelho/água
+            let mirror_amp = (amp * 0.85).clamp(0.0, 1.0);
+
+            let character = if mirror_amp >= threshold + (1.0 / mirror_rows as f32) {
+                '█'
+            } else if mirror_amp >= threshold {
+                let fractional = (mirror_amp - threshold) * mirror_rows as f32;
+                let char_index =
+                    (fractional * (INVERTED_WAVE_CHARS.len() - 1) as f32).round() as usize;
+                INVERTED_WAVE_CHARS[char_index.clamp(0, INVERTED_WAVE_CHARS.len() - 1)]
+            } else {
+                ' '
+            };
+
+            // Cores do reflexo: tons mais suaves/esmaecidos para efeito de profundidade
+            let mirror_color = if i < amplitudes.len() / 3 {
+                Color::Rgb(0, 120, 160)
+            } else if i < (amplitudes.len() * 2) / 3 {
+                Color::Rgb(30, 130, 70)
+            } else {
+                Color::Rgb(130, 40, 130)
+            };
+
+            spans.push(Span::styled(
+                format!("{} ", character),
+                Style::default().fg(mirror_color),
+            ));
+        }
+
+        lines.push(Line::from(spans));
+    }
+
     lines
 }
 
 pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32]) {
-    let rows = 18;
-    let wave_lines = render_soundwave(bars, rows);
+    // Sem blocos ou bordas, aproveitamos a altura total disponível na tela
+    let available_height = area.height as usize;
 
-    let soundwave_widget = Paragraph::new(wave_lines)
-        .alignment(Alignment::Center);
+    // Proporção harmônica de altura: ~55% superior, 1 linha central, ~40% espelho inferior
+    let usable_lines = available_height.saturating_sub(1);
+    let upper_rows = ((usable_lines * 55) / 100).clamp(3, 16);
+    let mirror_rows = ((usable_lines * 40) / 100).clamp(2, 12);
+    let content_lines = upper_rows + 1 + mirror_rows;
 
+    let wave_lines = render_mirrored_soundwave(bars, upper_rows, mirror_rows);
+
+    let soundwave_widget = Paragraph::new(wave_lines).alignment(Alignment::Center);
+
+    // Centraliza perfeitamente o visualizador no centro vertical da tela
+    let widget_height = (content_lines as u16).min(area.height);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(0),
-            Constraint::Length(rows as u16 + 2), // +2 para as bordas do bloco
+            Constraint::Fill(1),
+            Constraint::Length(widget_height),
+            Constraint::Fill(1),
         ])
         .split(area);
 
