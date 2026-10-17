@@ -12,7 +12,7 @@ mod tests {
 
     #[test]
     fn test_app_creation() {
-        let app = app::App::new();
+        let app = app::App::default();
         assert_eq!(app.audio_bars.len(), 32);
         assert_eq!(app.gain, 1.0);
     }

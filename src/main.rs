@@ -28,8 +28,7 @@ use tui::Tui;
 use update::update;
 
 fn main() -> Result<()> {
-    // Inicializa o estado da aplicação
-    let mut app = App::new();
+    
 
     // Inicializa o manipulador de eventos da TUI (~60 FPS com 16ms)
     let events = EventHandler::new(16);
@@ -43,6 +42,9 @@ fn main() -> Result<()> {
             eprintln!("Falha ao iniciar stream de áudio cpal: {}", e);
         }
     }
+
+    // Inicializa o estado da aplicação
+    let mut app = App::new(sound_device.unwrap());
 
     // Inicializa a interface de terminal
     let backend = CrosstermBackend::new(std::io::stderr());
