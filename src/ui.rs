@@ -1,9 +1,5 @@
 use ratatui::{
-    Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
-    text::{Line, Span},
-    widgets::Paragraph,
+    Frame, layout::{Alignment, Constraint, Direction, Layout, Rect}, style::{Color, Style}, text::{Line, Span}, widgets::{Block, Clear, Paragraph},
 };
 
 use crate::app::App;
@@ -11,6 +7,7 @@ use crate::app::App;
 pub fn render(app: &mut App, frame: &mut Frame) {
     // Utiliza a tela inteira, centralizando o visualizador vertical e horizontalmente
     draw_soundwave(frame, frame.area(), &app.displayed_bars());
+    if app.show_popup {render_popup(frame);}
 }
 
 // Caracteres para as barras superiores (ancoradas na base)
@@ -18,6 +15,16 @@ const WAVE_CHARS: &[char] = &[' ', '▂', '▃', '▄', '▅', '▆', '▇', '�
 
 // Caracteres para o espelho inferior (ancorados no topo / de cabeça para baixo)
 const INVERTED_WAVE_CHARS: &[char] = &[' ', '▔', '▀', '█'];
+
+// Desenha menu de popup
+fn render_popup(frame: &mut Frame){
+    let popup_block = Block::bordered().title("Select Output Device");
+    let centered_area = frame.area().centered(Constraint::Percentage(60), Constraint::Percentage(20));
+    // clears out any background in the area before rendering the popup
+    frame.render_widget(Clear, centered_area);
+    let paragraph = Paragraph::new("Lorem ipsum").block(popup_block);
+    frame.render_widget(paragraph, centered_area);
+}
 
 /// Renderiza as barras normais (para cima) combinadas com o efeito de espelho (de cabeça para baixo).
 fn render_mirrored_soundwave(

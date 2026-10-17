@@ -16,6 +16,8 @@ pub struct App {
     pub attack_factor: f32,
     /// Fator de queda (Decay): decaimento gradual e fluido
     pub decay_factor: f32,
+    /// should show popup menu?
+    pub show_popup: bool,
 }
 
 impl Default for App {
@@ -29,6 +31,7 @@ impl Default for App {
             gain: 1.0,
             attack_factor: 0.65,
             decay_factor: 0.20,
+            show_popup: false,
         }
     }
 }
