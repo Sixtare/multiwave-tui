@@ -2,12 +2,12 @@ use ratatui::{
     Frame, layout::{Alignment, Constraint, Direction, Layout, Rect}, style::{Color, Style}, text::{Line, Span}, widgets::{Block, Clear, Paragraph},
 };
 
-use crate::app::App;
+use crate::{app::App, sound_device::SoundDevice};
 
 pub fn render(app: &mut App, frame: &mut Frame) {
     // Utiliza a tela inteira, centralizando o visualizador vertical e horizontalmente
     draw_soundwave(frame, frame.area(), &app.displayed_bars());
-    if app.show_popup {render_popup(frame);}
+    if app.show_popup {render_popup(frame, &app.sound_device);}
 }
 
 // Caracteres para as barras superiores (ancoradas na base)
@@ -17,12 +17,17 @@ const WAVE_CHARS: &[char] = &[' ', '▂', '▃', '▄', '▅', '▆', '▇', '�
 const INVERTED_WAVE_CHARS: &[char] = &[' ', '▔', '▀', '█'];
 
 // Desenha menu de popup
-fn render_popup(frame: &mut Frame){
+fn render_popup(frame: &mut Frame, sound_device: &SoundDevice){
     let popup_block = Block::bordered().title("Select Output Device");
     let centered_area = frame.area().centered(Constraint::Percentage(60), Constraint::Percentage(20));
     // clears out any background in the area before rendering the popup
     frame.render_widget(Clear, centered_area);
-    let paragraph = Paragraph::new("Lorem ipsum").block(popup_block);
+    
+    let text = format!("Device name: {} \n
+    Device info: {}",&sound_device.name, &sound_device.info);
+    let paragraph = Paragraph::new(text)
+        .block(popup_block);
+    
     frame.render_widget(paragraph, centered_area);
 }
 

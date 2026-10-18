@@ -65,7 +65,7 @@ impl SoundDevice {
         );
 
         Ok(Self {
-            device: Some(device),
+            device:Some(device),
             name: device_name,
             info,
             _stream: None,
