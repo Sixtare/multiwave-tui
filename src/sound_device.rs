@@ -9,28 +9,14 @@ use crate::audio_processor::AudioProcessor;
 use crate::event::Event;
 
 pub struct SoundDevice {
-    pub device: Option<Device>,
     pub name: String,
     pub info: String,
     _stream: Option<Stream>,
 }
 
 impl SoundDevice {
-        /// Cria um dispositivo simulado em memória (não toca em drivers nem no CPAL)
-    pub fn dummy() -> Self {
-        Self {
-            device: None,
-            name: "Dispositivo Simulado (Dummy)".to_string(),
-            info: "Dispositivo de teste para desenvolvimento e CI".to_string(),
-            _stream: None,
-        }
-    }
-}
-
-impl SoundDevice {
     /// Configura variáveis de ambiente necessárias para capturar a saída de som (Sink Monitor)
     /// no PipeWire e no PulseAudio antes de abrir os streams de áudio.
-    
     pub fn init_capture_env() {
         // No PipeWire (via pipewire-alsa), stream.capture.sink: true instrui o WirePlumber
         // a vincular o stream de gravação diretamente ao monitor da saída de áudio (Sink).
@@ -65,7 +51,6 @@ impl SoundDevice {
         );
 
         Ok(Self {
-            device:Some(device),
             name: device_name,
             info,
             _stream: None,

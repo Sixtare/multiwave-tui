@@ -1,6 +1,4 @@
-use crate::sound_device::SoundDevice;
-
-//#[derive(Debug)]
+#[derive(Debug)]
 pub struct App {
     /// should the application exit?
     pub should_quit: bool,
@@ -20,8 +18,6 @@ pub struct App {
     pub decay_factor: f32,
     /// should show popup menu?
     pub show_popup: bool,
-    /// sound device itself and info
-    pub sound_device: SoundDevice,
 }
 
 impl Default for App {
@@ -36,16 +32,14 @@ impl Default for App {
             attack_factor: 0.65,
             decay_factor: 0.20,
             show_popup: false,
-            sound_device: SoundDevice::dummy(),
         }
     }
 }
 
 impl App {
-    pub fn new(sound_device: SoundDevice) -> Self {
-        let mut app = Self::default();
-        app.sound_device = sound_device;
-        app
+    /// Constructs a new instance of [`App`].
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Executa um ciclo de animação a cada tick (~60 FPS)
