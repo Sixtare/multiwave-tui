@@ -25,46 +25,64 @@ use event::{Event, EventHandler};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use sound_device::SoundDevice;
 use tui::Tui;
-use update::update;
+use update::{update, AppAction};
 
 fn main() -> Result<()> {
-    // Inicializa o estado da aplicação
-    let mut app = App::new();
-
-    // Inicializa o manipulador de eventos da TUI (~60 FPS com 16ms)
+    // Initialize the TUI event handler (~60 FPS at 16ms)
     let events = EventHandler::new(16);
     let audio_sender = events.sender();
 
-    // Inicializa a captura de áudio no sound_device
+    // Initialize sound device capture
     let mut sound_device = SoundDevice::new().ok();
-    if let Some(ref mut dev) = sound_device {
-        // Dispara a captura de áudio na thread de alta performance do cpal (32 barras de FFT, ganho 2.5)
-        if let Err(e) = dev.start_capture(audio_sender, 32, 2.5) {
-            eprintln!("Falha ao iniciar stream de áudio cpal: {}", e);
+    let (device_names, active_idx) = match sound_device.as_mut() {
+        Some(dev) => {
+            if let Err(e) = dev.start_capture(audio_sender.clone(), 32, 2.5) {
+                eprintln!("Failed to start CPAL audio stream: {}", e);
+            }
+            (dev.device_names(), dev.active_idx)
         }
-    }
+        None => (Vec::new(), 0),
+    };
 
-    // Inicializa a interface de terminal
+    // Initialize application state with device names (App does NOT hold SoundDevice)
+    let mut app = App::with_devices(device_names, active_idx);
+
+    // Initialize terminal user interface
     let backend = CrosstermBackend::new(std::io::stderr());
     let terminal = Terminal::new(backend)?;
     let mut tui = Tui::new(terminal, events);
     tui.enter()?;
 
-    // Loop principal da aplicação
+    // Main application loop
     while !app.should_quit {
-        // Renderiza a interface do usuário
+        // Render the user interface
         tui.draw(&mut app)?;
 
-        // Aguarda e processa o próximo evento
+        // Wait for and process the next event
         match tui.events.next()? {
             Event::Tick => {
                 app.tick();
             }
             Event::Key(key_event) => {
-                update(&mut app, key_event);
+                if let Some(action) = update(&mut app, key_event) {
+                    match action {
+                        AppAction::ChangeDevice(new_idx) => {
+                            if let Some(ref mut dev) = sound_device {
+                                if let Err(e) = dev.switch_device(
+                                    new_idx,
+                                    audio_sender.clone(),
+                                    32,
+                                    2.5,
+                                ) {
+                                    eprintln!("Failed to switch audio device: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Event::AudioBars(bars) => {
-                // Atualiza o estado da aplicação com as barras calculadas pelo realfft
+                // Update application state with bars calculated by realfft
                 app.update_audio_bars(bars);
             }
             Event::Mouse(_) => {}
@@ -72,7 +90,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // Restaura o terminal ao sair
+    // Restore the terminal upon exit
     tui.exit()?;
     Ok(())
 }

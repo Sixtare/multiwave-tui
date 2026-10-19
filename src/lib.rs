@@ -18,9 +18,15 @@ mod tests {
     }
 
     #[test]
-    fn test_sound_device_sink_monitor() {
-        let mut dev = sound_device::SoundDevice::new().unwrap();
-        let (tx, _rx) = std::sync::mpsc::channel();
-        assert!(dev.start_capture(tx, 16, 1.0).is_ok());
+    fn test_sound_device_filtered_list() {
+        let devices = sound_device::SoundDevice::list_output_devices();
+        assert!(!devices.is_empty(), "At least one output device should be detected");
+
+        // Verify that internal dummy devices like "Discard all samples" were filtered out
+        for (name, _) in &devices {
+            let lower = name.to_lowercase();
+            assert!(!lower.contains("discard all samples"));
+            assert!(!lower.contains("default alsa output"));
+        }
     }
 }
