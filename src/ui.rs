@@ -14,6 +14,33 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     if app.show_popup {
         render_popup(frame, app);
     }
+    if let Some(error) = &app.audio_error {
+        render_audio_error(frame, error);
+    }
+}
+
+/// Draws the current audio error as a status line at the bottom of the screen.
+fn render_audio_error(frame: &mut Frame, message: &str) {
+    let area = frame.area();
+    if area.height == 0 {
+        return;
+    }
+
+    let status_area = Rect {
+        x: area.x,
+        y: area.y + area.height - 1,
+        width: area.width,
+        height: 1,
+    };
+
+    frame.render_widget(Clear, status_area);
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            format!(" Audio error: {message}"),
+            Style::default().fg(Color::Red),
+        )),
+        status_area,
+    );
 }
 
 // Characters for the upper bars (base-anchored)
@@ -28,7 +55,7 @@ fn render_popup(frame: &mut Frame, app: &App) {
         .title(" Select Output Device (↑/↓ to navigate, Enter to select, Esc/s to close) ")
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded)
-        .style(Style::default().fg(Color::Yellow));
+        .style(Style::default());
 
     let items_count = app.devices.len().max(1);
     let popup_height = (items_count as u16 + 4).clamp(6, 18);

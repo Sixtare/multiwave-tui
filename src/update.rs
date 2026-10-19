@@ -23,7 +23,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
                 app.select_next_device();
             }
             KeyCode::Enter => {
-                app.active_device_idx = app.selected_device_idx;
+                // Active index is updated only after the stream starts successfully.
                 app.show_popup = false;
                 return Some(AppAction::ChangeDevice(app.selected_device_idx));
             }

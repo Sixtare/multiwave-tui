@@ -198,7 +198,7 @@ mod tests {
             let total_energy: f32 = bars.iter().sum();
             assert!(total_energy > 0.0);
             for &val in &bars {
-                assert!(val >= 0.0 && val <= 1.0);
+                assert!((0.0..=1.0).contains(&val));
             }
         }
     }

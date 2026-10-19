@@ -20,6 +20,8 @@ pub enum Event {
     Resize(u16, u16),
     /// Audio visualization bars.
     AudioBars(Vec<f32>),
+    /// Audio stream error reported by the audio callback.
+    AudioError(String),
 }
 
 /// Terminal event handler.

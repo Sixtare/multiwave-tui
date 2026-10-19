@@ -34,18 +34,25 @@ fn main() -> Result<()> {
 
     // Initialize sound device capture
     let mut sound_device = SoundDevice::new().ok();
+    let mut startup_error = None;
     let (device_names, active_idx) = match sound_device.as_mut() {
         Some(dev) => {
             if let Err(e) = dev.start_capture(audio_sender.clone(), 32, 2.5) {
-                eprintln!("Failed to start CPAL audio stream: {}", e);
+                startup_error = Some(format!("Failed to start audio stream: {e}"));
             }
             (dev.device_names(), dev.active_idx)
         }
-        None => (Vec::new(), 0),
+        None => {
+            startup_error = Some("No audio output devices available".to_string());
+            (Vec::new(), 0)
+        }
     };
 
     // Initialize application state with device names (App does NOT hold SoundDevice)
     let mut app = App::with_devices(device_names, active_idx);
+    if let Some(error) = startup_error {
+        app.set_audio_error(error);
+    }
 
     // Initialize terminal user interface
     let backend = CrosstermBackend::new(std::io::stderr());
@@ -68,14 +75,24 @@ fn main() -> Result<()> {
                     match action {
                         AppAction::ChangeDevice(new_idx) => {
                             if let Some(ref mut dev) = sound_device {
-                                if let Err(e) = dev.switch_device(
+                                match dev.switch_device(
                                     new_idx,
                                     audio_sender.clone(),
                                     32,
                                     2.5,
                                 ) {
-                                    eprintln!("Failed to switch audio device: {}", e);
+                                    Ok(()) => {
+                                        app.active_device_idx = new_idx;
+                                        app.clear_audio_error();
+                                    }
+                                    Err(e) => {
+                                        app.set_audio_error(format!(
+                                            "Failed to switch audio device: {e}"
+                                        ));
+                                    }
                                 }
+                            } else {
+                                app.set_audio_error("No audio output device available");
                             }
                         }
                     }
@@ -84,6 +101,9 @@ fn main() -> Result<()> {
             Event::AudioBars(bars) => {
                 // Update application state with bars calculated by realfft
                 app.update_audio_bars(bars);
+            }
+            Event::AudioError(message) => {
+                app.set_audio_error(message);
             }
             Event::Mouse(_) => {}
             Event::Resize(_, _) => {}

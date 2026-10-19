@@ -24,6 +24,8 @@ pub struct App {
     pub selected_device_idx: usize,
     /// Index of the currently active audio device being captured.
     pub active_device_idx: usize,
+    /// Most recent audio device or stream error, if any.
+    pub audio_error: Option<String>,
 }
 
 impl Default for App {
@@ -41,6 +43,7 @@ impl Default for App {
             devices: Vec::new(),
             selected_device_idx: 0,
             active_device_idx: 0,
+            audio_error: None,
         }
     }
 }
@@ -74,6 +77,16 @@ impl App {
     /// Sets should_quit to true to quit the application.
     pub fn quit(&mut self) {
         self.should_quit = true;
+    }
+
+    /// Records an audio device or stream error for display in the UI.
+    pub fn set_audio_error(&mut self, message: impl Into<String>) {
+        self.audio_error = Some(message.into());
+    }
+
+    /// Clears the audio error after a valid output starts capturing.
+    pub fn clear_audio_error(&mut self) {
+        self.audio_error = None;
     }
 
     pub fn increment_counter(&mut self) {
@@ -190,11 +203,26 @@ mod tests {
 
     #[test]
     fn test_app_gain_adjustment() {
-        let mut app = App::default();
-        app.audio_bars = vec![0.4; 32];
+        let mut app = App {
+            audio_bars: vec![0.4; 32],
+            ..App::default()
+        };
         app.increase_gain();
         assert_eq!(app.gain, 1.25);
-        assert_eq!(app.displayed_bars()[0], (0.4 * 1.25 as f32).clamp(0.0, 1.0));
+        assert_eq!(app.displayed_bars()[0], (0.4_f32 * 1.25).clamp(0.0, 1.0));
+    }
+
+    #[test]
+    fn test_audio_error_clears_after_success() {
+        let mut app = App::default();
+        app.set_audio_error("Unsupported sample format: I32");
+        assert_eq!(
+            app.audio_error.as_deref(),
+            Some("Unsupported sample format: I32")
+        );
+
+        app.clear_audio_error();
+        assert!(app.audio_error.is_none());
     }
 
     #[test]
