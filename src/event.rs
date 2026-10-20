@@ -8,7 +8,7 @@ use color_eyre::Result;
 use ratatui::crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
 
 /// Terminal events.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Event {
     /// Terminal tick.
     Tick,
@@ -18,6 +18,10 @@ pub enum Event {
     Mouse(MouseEvent),
     /// Terminal resize.
     Resize(u16, u16),
+    /// Audio visualization bars.
+    AudioBars(Vec<f32>),
+    /// Audio stream error reported by the audio callback.
+    AudioError(String),
 }
 
 /// Terminal event handler.
@@ -75,6 +79,11 @@ impl EventHandler {
             receiver,
             handler,
         }
+    }
+
+    /// Returns a clone of the event sender.
+    pub fn sender(&self) -> mpsc::Sender<Event> {
+        self.sender.clone()
     }
 
     /// Receive the next event from the handler thread.
