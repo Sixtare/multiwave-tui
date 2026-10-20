@@ -9,6 +9,7 @@ pub mod update;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cpal::traits::DeviceTrait;
 
     #[test]
     fn test_app_creation() {
@@ -23,10 +24,26 @@ mod tests {
         assert!(!devices.is_empty(), "At least one output device should be detected");
 
         // Verify that internal dummy devices like "Discard all samples" were filtered out
-        for (name, _) in &devices {
+        // and that every listed device except the auto-following default is a physical
+        // card-scoped PCM rather than a global ALSA plugin alias.
+        for (idx, (name, dev)) in devices.iter().enumerate() {
             let lower = name.to_lowercase();
             assert!(!lower.contains("discard all samples"));
             assert!(!lower.contains("default alsa output"));
+
+            if idx == 0 {
+                continue;
+            }
+
+            let driver = dev
+                .description()
+                .ok()
+                .and_then(|desc| desc.driver().map(str::to_string))
+                .unwrap_or_default();
+            assert!(
+                sound_device::is_card_scoped_pcm(&driver),
+                "unexpected global ALSA device '{name}' with PCM id '{driver}'"
+            );
         }
     }
 }

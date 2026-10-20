@@ -62,13 +62,15 @@ impl SoundDevice {
                 let name = desc.name().to_string();
                 let driver = desc.driver().unwrap_or("");
 
-                // Filter out raw 'hw:' to avoid technical duplicates of 'plughw:' software converters.
-                // JACK and OSS are legacy plugins whose backends are usually not running/existent;
-                // skip them before probing so ALSA doesn't emit connection errors for them.
-                if driver.starts_with("hw:")
-                    || driver.starts_with("jack")
-                    || driver.starts_with("oss")
-                {
+                // ALSA exposes global plugin aliases (lavrate, speex, upmix, jack, oss,
+                // pipewire, pulse, ...) next to the real card PCMs. They share the
+                // `snd_device_name_hint` list but have no `:CARD=` in their PCM id.
+                // Filter them before probing so they are not shown as outputs and their
+                // backends are not opened (JACK/OSS would emit connection errors).
+                // Also drop raw 'hw:' entries to avoid duplicates of 'plughw:' converters.
+                let is_global_alsa_plugin =
+                    cfg!(target_os = "linux") && !is_card_scoped_pcm(driver);
+                if is_global_alsa_plugin || driver.starts_with("hw:") {
                     continue;
                 }
 
@@ -255,6 +257,12 @@ impl SoundDevice {
     }
 }
 
+/// Returns true when an ALSA PCM id points at a specific sound card, as opposed to a global
+/// plugin alias such as `lavrate`, `speex`, `upmix`, `jack`, `pipewire` or `default`.
+pub(crate) fn is_card_scoped_pcm(driver: &str) -> bool {
+    driver.contains(":CARD=")
+}
+
 /// Reports stream errors through the event channel instead of writing to stderr, which would
 /// corrupt the TUI (the terminal backend also uses stderr).
 fn stream_error_callback(
@@ -262,5 +270,51 @@ fn stream_error_callback(
 ) -> impl FnMut(cpal::StreamError) + Send + 'static {
     move |err| {
         let _ = sender.send(Event::AudioError(format!("Audio stream error: {err}")));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_card_scoped_pcm;
+
+    #[test]
+    fn test_global_alsa_plugins_are_not_card_scoped() {
+        for driver in [
+            "null",
+            "default",
+            "sysdefault",
+            "lavrate",
+            "samplerate",
+            "speexrate",
+            "speex",
+            "upmix",
+            "vdownmix",
+            "jack",
+            "oss",
+            "pipewire",
+            "pulse",
+        ] {
+            assert!(
+                !is_card_scoped_pcm(driver),
+                "global ALSA plugin '{driver}' should be filtered out"
+            );
+        }
+    }
+
+    #[test]
+    fn test_physical_alsa_pcms_are_card_scoped() {
+        for driver in [
+            "sysdefault:CARD=S",
+            "front:CARD=S,DEV=0",
+            "surround71:CARD=Generic_1,DEV=0",
+            "iec958:CARD=S,DEV=0",
+            "hdmi:CARD=HDMI,DEV=1",
+            "plughw:CARD=0,DEV=0",
+        ] {
+            assert!(
+                is_card_scoped_pcm(driver),
+                "physical ALSA PCM '{driver}' should be kept"
+            );
+        }
     }
 }
