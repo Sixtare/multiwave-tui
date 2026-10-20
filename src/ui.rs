@@ -3,17 +3,20 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Clear, Paragraph},
+    widgets::{
+        Block, BorderType, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    },
 };
 
 use crate::app::App;
 
 pub fn render(app: &mut App, frame: &mut Frame) {
-    // Uses the full screen, centering the visualizer vertically and horizontally
-    draw_soundwave(frame, frame.area(), &app.displayed_bars());
-    if app.show_popup {
-        render_popup(frame, app);
+    match app.show_popup {
+        false => draw_soundwave(frame, frame.area(), &app.displayed_bars()),
+        // Uses the full screen, centering the visualizer vertically and horizontally
+        true => render_popup(frame, app),
     }
+    
     if let Some(error) = &app.audio_error {
         render_audio_error(frame, error);
     }
@@ -50,7 +53,12 @@ const WAVE_CHARS: &[char] = &[' ', '▂', '▃', '▄', '▅', '▆', '▇', '�
 const INVERTED_WAVE_CHARS: &[char] = &[' ', '▔', '▀', '█'];
 
 // Draws popup menu with available output audio devices
-fn render_popup(frame: &mut Frame, app: &App) {
+fn render_popup(frame: &mut Frame, app: &mut App) {
+    let area = frame.area();
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
     let popup_block = Block::bordered()
         .title(" Select Output Device (↑/↓ to navigate, Enter to select, Esc/s to close) ")
         .title_alignment(Alignment::Center)
@@ -58,14 +66,27 @@ fn render_popup(frame: &mut Frame, app: &App) {
         .style(Style::default());
 
     let items_count = app.devices.len().max(1);
-    let popup_height = (items_count as u16 + 4).clamp(6, 18);
-    let centered_area = frame.area().centered(
+    let desired_height = (items_count as u16 + 4).clamp(6, 18);
+    // Keep a small margin around the popup, and never exceed the terminal height.
+    let max_height = area.height.saturating_sub(2).max(3).min(area.height);
+    let popup_height = desired_height.min(max_height);
+    let centered_area = area.centered(
         Constraint::Percentage(70),
         Constraint::Length(popup_height),
     );
 
     // Clears out any background in the area before rendering the popup
     frame.render_widget(Clear, centered_area);
+
+    let list_height = popup_height.saturating_sub(2) as usize;
+    if list_height > 0 {
+        app.ensure_device_visible(list_height);
+    }
+    let needs_scrollbar =
+        app.devices.len() > list_height && list_height > 0 && centered_area.width > 2;
+
+    let inner_area = popup_block.inner(centered_area);
+    frame.render_widget(popup_block, centered_area);
 
     let mut lines = Vec::new();
     if app.devices.is_empty() {
@@ -95,10 +116,37 @@ fn render_popup(frame: &mut Frame, app: &App) {
     }
 
     let paragraph = Paragraph::new(lines)
-        .block(popup_block)
-        .alignment(Alignment::Left);
+        .alignment(Alignment::Left)
+        .scroll((app.device_scroll_offset as u16, 0));
 
-    frame.render_widget(paragraph, centered_area);
+    let mut content_area = inner_area;
+    if needs_scrollbar && content_area.width > 0 {
+        // Reserve the rightmost inner column for the scrollbar.
+        content_area.width -= 1;
+    }
+
+    frame.render_widget(paragraph, content_area);
+
+    if needs_scrollbar {
+        let scrollbar_area = Rect {
+            x: inner_area.x + inner_area.width - 1,
+            y: inner_area.y,
+            width: 1,
+            height: inner_area.height,
+        };
+        let mut scrollbar_state = ScrollbarState::new(app.devices.len())
+            .position(app.selected_device_idx.min(app.devices.len() - 1))
+            .viewport_content_length(list_height);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .track_style(Style::default().fg(Color::DarkGray))
+            .thumb_symbol("█")
+            .thumb_style(Style::default().fg(Color::Cyan));
+
+        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    }
 }
 
 /// Renders normal bars (upward) combined with the mirror effect (downward / upside down).

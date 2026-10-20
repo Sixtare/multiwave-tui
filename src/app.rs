@@ -24,6 +24,8 @@ pub struct App {
     pub selected_device_idx: usize,
     /// Index of the currently active audio device being captured.
     pub active_device_idx: usize,
+    /// First device row visible in the popup when the list is scrollable.
+    pub device_scroll_offset: usize,
     /// Most recent audio device or stream error, if any.
     pub audio_error: Option<String>,
 }
@@ -43,6 +45,7 @@ impl Default for App {
             devices: Vec::new(),
             selected_device_idx: 0,
             active_device_idx: 0,
+            device_scroll_offset: 0,
             audio_error: None,
         }
     }
@@ -117,6 +120,24 @@ impl App {
                 self.selected_device_idx -= 1;
             }
         }
+    }
+
+    /// Scrolls the device popup so the selected row stays within `visible_rows`.
+    pub fn ensure_device_visible(&mut self, visible_rows: usize) {
+        if visible_rows == 0 || self.devices.is_empty() {
+            return;
+        }
+
+        let selected = self.selected_device_idx.min(self.devices.len() - 1);
+        let max_offset = self.devices.len().saturating_sub(visible_rows);
+
+        if selected < self.device_scroll_offset {
+            self.device_scroll_offset = selected;
+        } else if selected >= self.device_scroll_offset.saturating_add(visible_rows) {
+            self.device_scroll_offset = selected + 1 - visible_rows;
+        }
+
+        self.device_scroll_offset = self.device_scroll_offset.min(max_offset);
     }
 
     /// Updates audio bars received from the FFT and applies smoothing.
@@ -223,6 +244,27 @@ mod tests {
 
         app.clear_audio_error();
         assert!(app.audio_error.is_none());
+    }
+
+    #[test]
+    fn test_device_popup_scroll_keeps_selection_visible() {
+        let devices = (0..10).map(|i| format!("Device {i}")).collect();
+        let mut app = App::with_devices(devices, 0);
+
+        app.ensure_device_visible(4);
+        assert_eq!(app.device_scroll_offset, 0);
+
+        app.selected_device_idx = 5;
+        app.ensure_device_visible(4);
+        assert_eq!(app.device_scroll_offset, 2);
+
+        app.selected_device_idx = 0;
+        app.ensure_device_visible(4);
+        assert_eq!(app.device_scroll_offset, 0);
+
+        app.selected_device_idx = 9;
+        app.ensure_device_visible(4);
+        assert_eq!(app.device_scroll_offset, 6);
     }
 
     #[test]

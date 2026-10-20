@@ -36,7 +36,7 @@ Ratatui terminal audio visualizer (Rust, edition 2024). Captures system output a
   - Upper half: normal bars growing upward using base-anchored Unicode blocks (` ▂▃▄▅▆▇█`) with cyan-green-magenta gradient.
   - Center line: subtle horizontal divider (`──`).
   - Lower half: upside-down mirror effect growing downward using top-anchored blocks (` ▔▀█`), with attenuated amplitude and deeper tones.
-- Device selection popup renders a rounded bordered box using `Clear` over the visualizer, highlighting the selected cursor in cyan and tagging the active device with `[Active]`.
+- Device selection popup renders a rounded bordered box using `Clear` over the visualizer, highlighting the selected cursor in cyan and tagging the active device with `[Active]`. When the terminal is too short for every device, the popup caps its height, scrolls to keep the selection visible, and shows a vertical scrollbar.
 
 ## Keybindings (`src/update.rs`)
 
