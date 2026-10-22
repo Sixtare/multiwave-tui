@@ -16,7 +16,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         // Uses the full screen, centering the visualizer vertically and horizontally
         true => render_popup(frame, app),
     }
-    
+
     if let Some(error) = &app.audio_error {
         render_audio_error(frame, error);
     }
@@ -70,10 +70,7 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
     // Keep a small margin around the popup, and never exceed the terminal height.
     let max_height = area.height.saturating_sub(2).max(3).min(area.height);
     let popup_height = desired_height.min(max_height);
-    let centered_area = area.centered(
-        Constraint::Percentage(70),
-        Constraint::Length(popup_height),
-    );
+    let centered_area = area.centered(Constraint::Percentage(70), Constraint::Length(popup_height));
 
     // Clears out any background in the area before rendering the popup
     frame.render_widget(Clear, centered_area);

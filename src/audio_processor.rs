@@ -1,6 +1,6 @@
+use realfft::{RealFftPlanner, RealToComplex};
 use std::f32::consts::PI;
 use std::sync::Arc;
-use realfft::{RealFftPlanner, RealToComplex};
 
 /// Processador de áudio responsável por receber amostras brutas (intercaladas),
 /// aplicar downmix, acumulação, FFT (via realfft), cálculo de magnitude,
@@ -21,14 +21,28 @@ pub struct AudioProcessor {
 
 impl AudioProcessor {
     /// Cria uma nova instância de `AudioProcessor`.
-    /// 
+    ///
     /// - `channels`: número de canais de áudio recebidos (ex: 1 para mono, 2 para estéreo).
+    /// - `sample_rate`: taxa de amostragem real do stream, em Hz.
     /// - `fft_size`: tamanho do bloco da FFT (deve ser potência de 2, ex: 1024).
     /// - `num_bars`: quantidade de barras para a visualização na TUI (ex: 16 ou 32).
     /// - `gain`: multiplicador de ganho para normalização de volume.
-    pub fn new(channels: usize, fft_size: usize, num_bars: usize, gain: f32) -> Self {
-        assert!(fft_size > 0 && (fft_size & (fft_size - 1)) == 0, "fft_size deve ser potência de 2");
-        assert!(num_bars > 0 && num_bars <= fft_size / 2, "num_bars inválido para o fft_size");
+    pub fn new(
+        channels: usize,
+        sample_rate: u32,
+        fft_size: usize,
+        num_bars: usize,
+        gain: f32,
+    ) -> Self {
+        assert!(sample_rate > 0, "sample_rate must be greater than zero");
+        assert!(
+            fft_size > 0 && (fft_size & (fft_size - 1)) == 0,
+            "fft_size deve ser potência de 2"
+        );
+        assert!(
+            num_bars > 0 && num_bars <= fft_size / 2,
+            "num_bars inválido para o fft_size"
+        );
 
         let mut planner = RealFftPlanner::<f32>::new();
         let fft_plan = planner.plan_fft_forward(fft_size);
@@ -42,7 +56,7 @@ impl AudioProcessor {
             .collect();
 
         // Divisão de frequências com distribuição logarítmica (faixas de 40 Hz até 16.000 Hz)
-        let sample_rate: f32 = 44100.0;
+        let sample_rate = sample_rate as f32;
         let min_freq: f32 = 40.0;
         let max_freq: f32 = 16000.0;
         let total_bins = fft_size / 2; // 512 bins utilizáveis para fft_size 1024
@@ -101,13 +115,7 @@ impl AudioProcessor {
             self.sample_accumulator.extend_from_slice(interleaved);
         } else {
             for frame in interleaved.chunks(self.channels) {
-                let mono_sample = if frame.len() == 1 {
-                    frame[0]
-                } else {
-                    // Média matemática dos canais disponíveis
-                    frame.iter().sum::<f32>() / frame.len() as f32
-                };
-                self.sample_accumulator.push(mono_sample);
+                self.sample_accumulator.push(self.downmix_frame(frame));
             }
         }
 
@@ -123,12 +131,13 @@ impl AudioProcessor {
                 self.input_buffer[idx] = sample * self.window[idx];
             }
 
-            if self.fft_plan.process(&mut self.input_buffer, &mut self.output_buffer).is_ok() {
+            if self
+                .fft_plan
+                .process(&mut self.input_buffer, &mut self.output_buffer)
+                .is_ok()
+            {
                 // 4. Cálculo de Magnitude (Módulo)
-                let magnitudes: Vec<f32> = self.output_buffer
-                    .iter()
-                    .map(|c| c.norm())
-                    .collect();
+                let magnitudes: Vec<f32> = self.output_buffer.iter().map(|c| c.norm()).collect();
 
                 let mut bars = Vec::with_capacity(self.num_bars);
 
@@ -166,6 +175,19 @@ impl AudioProcessor {
 
         results
     }
+
+    /// Downsamples an interleaved frame to mono.
+    ///
+    /// For multichannel layouts (5.1/7.1), only the front left/right channels are used.
+    /// Averaging every channel would mix in center, LFE and surround content and could
+    /// make the visualizer respond mostly to the subwoofer channel.
+    fn downmix_frame(&self, frame: &[f32]) -> f32 {
+        match frame {
+            [] => 0.0,
+            [mono] => *mono,
+            [left, right, ..] => (left + right) * 0.5,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -177,10 +199,11 @@ mod tests {
         let fft_size = 1024;
         let num_bars = 16;
         let gain = 2.0;
-        let mut processor = AudioProcessor::new(2, fft_size, num_bars, gain);
+        let sample_rate = 44_100;
+        let mut processor = AudioProcessor::new(2, sample_rate, fft_size, num_bars, gain);
 
         // Gera 2048 amostras estéreo de uma senoide pura de 440 Hz (médio-grave / nota Lá)
-        let sample_rate = 44100.0;
+        let sample_rate = sample_rate as f32;
         let freq = 440.0;
         let mut samples = Vec::new();
 
@@ -207,7 +230,7 @@ mod tests {
     fn test_treble_compensation() {
         let fft_size = 1024;
         let num_bars = 32;
-        let processor = AudioProcessor::new(2, fft_size, num_bars, 1.0);
+        let processor = AudioProcessor::new(2, 48_000, fft_size, num_bars, 1.0);
 
         // A barra 0 (grave) deve ter peso exatamente 1.0
         assert_eq!(processor.frequency_weights[0], 1.0);
@@ -224,5 +247,24 @@ mod tests {
 
         // A última barra (mais aguda) deve ter um boost substancial (ex: >= 5.0)
         assert!(processor.frequency_weights[num_bars - 1] >= 5.0);
+    }
+
+    #[test]
+    fn test_bin_ranges_use_stream_sample_rate() {
+        let at_44k = AudioProcessor::new(2, 44_100, 1024, 32, 1.0);
+        let at_48k = AudioProcessor::new(2, 48_000, 1024, 32, 1.0);
+
+        assert_ne!(at_44k.bin_ranges, at_48k.bin_ranges);
+    }
+
+    #[test]
+    fn test_multichannel_downmix_uses_front_channels() {
+        let processor = AudioProcessor::new(6, 48_000, 1024, 32, 1.0);
+        let frame = [1.0, 0.0, 0.75, 0.75, 0.75, 0.75];
+
+        // Only front left/right participate: (1.0 + 0.0) / 2.
+        assert_eq!(processor.downmix_frame(&frame), 0.5);
+        assert_eq!(processor.downmix_frame(&[0.25]), 0.25);
+        assert_eq!(processor.downmix_frame(&[]), 0.0);
     }
 }

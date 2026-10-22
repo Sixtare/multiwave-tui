@@ -35,7 +35,9 @@ impl Tui {
         // This way, you won't have your terminal messed up if an unexpected error happens.
         let panic_hook = panic::take_hook();
         panic::set_hook(Box::new(move |panic| {
-            Self::reset().expect("failed to reset the terminal");
+            // A panic hook must not panic again: reset on a best-effort basis and always
+            // delegate to the previous hook so the original panic is still reported.
+            let _ = Self::reset();
             panic_hook(panic);
         }));
 
@@ -49,8 +51,16 @@ impl Tui {
     /// This function is also used for the panic hook to revert
     /// the terminal properties if unexpected errors occur.
     fn reset() -> Result<()> {
-        terminal::disable_raw_mode()?;
-        execute!(io::stderr(), LeaveAlternateScreen, DisableMouseCapture)?;
+        // On Windows, DisableMouseCapture restores the console input mode captured by
+        // EnableMouseCapture, which was taken while raw mode was already active. Restore mouse
+        // capture first so the subsequent disable_raw_mode call is the final word.
+        let leave_alternate = execute!(io::stderr(), LeaveAlternateScreen);
+        let disable_mouse = execute!(io::stderr(), DisableMouseCapture);
+        let disable_raw = terminal::disable_raw_mode();
+
+        leave_alternate?;
+        disable_mouse?;
+        disable_raw?;
         Ok(())
     }
 
@@ -58,8 +68,12 @@ impl Tui {
     ///
     /// It disables the raw mode and reverts back the terminal properties.
     pub fn exit(&mut self) -> Result<()> {
-        Self::reset()?;
-        self.terminal.show_cursor()?;
+        // Try both cleanup steps even if one fails, so a partial reset does not leave the
+        // cursor hidden.
+        let reset_result = Self::reset();
+        let cursor_result = self.terminal.show_cursor();
+        reset_result?;
+        cursor_result?;
         Ok(())
     }
 
