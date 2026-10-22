@@ -22,10 +22,31 @@ pub mod update;
 use app::App;
 use color_eyre::Result;
 use event::{Event, EventHandler};
-use ratatui::{backend::CrosstermBackend, Terminal};
-use sound_device::SoundDevice;
+use ratatui::{Terminal, backend::CrosstermBackend};
+use sound_device::{DeviceListUpdate, SoundDevice};
 use tui::Tui;
-use update::{update, AppAction};
+use update::{AppAction, update};
+
+fn apply_device_update(app: &mut App, update: DeviceListUpdate) {
+    let device_count = update.names.len();
+    app.devices = update.names;
+    app.active_device_idx = if device_count == 0 {
+        0
+    } else {
+        update.active_idx.min(device_count - 1)
+    };
+    app.selected_device_idx = if device_count == 0 {
+        0
+    } else {
+        update.selected_idx.min(device_count - 1)
+    };
+
+    if let Some(message) = update.message {
+        app.set_audio_error(message);
+    } else if update.active_changed {
+        app.clear_audio_error();
+    }
+}
 
 fn main() -> Result<()> {
     // Initialize the TUI event handler (~60 FPS at 16ms)
@@ -69,18 +90,19 @@ fn main() -> Result<()> {
         match tui.events.next()? {
             Event::Tick => {
                 app.tick();
+                if let Some(ref mut dev) = sound_device
+                    && let Some(update) =
+                        dev.poll_device_changes(app.selected_device_idx, &audio_sender, 32, 2.5)
+                {
+                    apply_device_update(&mut app, update);
+                }
             }
             Event::Key(key_event) => {
                 if let Some(action) = update(&mut app, key_event) {
                     match action {
                         AppAction::ChangeDevice(new_idx) => {
                             if let Some(ref mut dev) = sound_device {
-                                match dev.switch_device(
-                                    new_idx,
-                                    audio_sender.clone(),
-                                    32,
-                                    2.5,
-                                ) {
+                                match dev.switch_device(new_idx, audio_sender.clone(), 32, 2.5) {
                                     Ok(()) => {
                                         app.active_device_idx = new_idx;
                                         app.clear_audio_error();
@@ -104,6 +126,19 @@ fn main() -> Result<()> {
             }
             Event::AudioError(message) => {
                 app.set_audio_error(message);
+            }
+            Event::AudioDeviceLost => {
+                if let Some(ref mut dev) = sound_device {
+                    let update = dev.recover_from_device_loss(
+                        app.selected_device_idx,
+                        &audio_sender,
+                        32,
+                        2.5,
+                    );
+                    apply_device_update(&mut app, update);
+                } else {
+                    app.set_audio_error("No audio output device available");
+                }
             }
             Event::Mouse(_) => {}
             Event::Resize(_, _) => {}

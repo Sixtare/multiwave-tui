@@ -22,6 +22,8 @@ pub enum Event {
     AudioBars(Vec<f32>),
     /// Audio stream error reported by the audio callback.
     AudioError(String),
+    /// The active audio endpoint was disconnected or its stream was invalidated.
+    AudioDeviceLost,
 }
 
 /// Terminal event handler.
