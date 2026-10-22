@@ -64,7 +64,18 @@ pub struct EventBatch {
     /// Most recent audio bars; older frames in the same batch are superseded.
     pub latest_bars: Option<Vec<f32>>,
     /// Events that must be handled individually, in arrival order.
-    pub events: Vec<Event>,
+    pub events: Vec<BatchEvent>,
+}
+
+/// Events that keep their identity and order inside an [`EventBatch`].
+#[derive(Clone, Debug)]
+pub enum BatchEvent {
+    /// Key press.
+    Key(KeyEvent),
+    /// Audio stream error reported by the audio callback.
+    AudioError(String),
+    /// The active audio endpoint was disconnected or its stream was invalidated.
+    AudioDeviceLost,
 }
 
 impl EventBatch {
@@ -75,12 +86,14 @@ impl EventBatch {
             Event::AudioBars(bars) => self.latest_bars = Some(bars),
             // Mouse input is unused and ratatui picks up the new size on the next draw.
             Event::Mouse(_) | Event::Resize(_, _) => {}
-            other => self.events.push(other),
+            Event::Key(key_event) => self.events.push(BatchEvent::Key(key_event)),
+            Event::AudioError(message) => self.events.push(BatchEvent::AudioError(message)),
+            Event::AudioDeviceLost => self.events.push(BatchEvent::AudioDeviceLost),
         }
     }
 
-    /// Returns true when the batch contains a tick, so rendering stays on the tick cadence.
-    pub fn needs_draw(&self) -> bool {
+    /// Returns true when the batch contains a tick; rendering and device polling follow ticks.
+    pub fn has_tick(&self) -> bool {
         self.ticks > 0
     }
 }
@@ -164,7 +177,7 @@ impl EventHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
 
     #[test]
     fn test_focus_events_are_ignored() {
@@ -196,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_keeps_keys_and_latest_bars_with_one_draw() {
+    fn test_batch_drains_backlog_keeping_keys_and_latest_bars() {
         let (sender, receiver) = mpsc::channel();
         for level in 0..50 {
             sender.send(Event::AudioBars(vec![level as f32])).unwrap();
@@ -215,19 +228,19 @@ mod tests {
 
         let batch = next_batch(&receiver).unwrap();
 
-        assert!(batch.needs_draw());
+        assert!(batch.has_tick());
         assert_eq!(batch.ticks, 2);
         assert_eq!(batch.latest_bars, Some(vec![49.0]));
         let keys: Vec<KeyCode> = batch
             .events
             .iter()
             .map(|event| match event {
-                Event::Key(key) => key.code,
+                BatchEvent::Key(key) => key.code,
                 other => panic!("unexpected event: {other:?}"),
             })
             .collect();
         assert_eq!(keys, vec![KeyCode::Char('s'), KeyCode::Down]);
-        // The whole backlog fits in one batch, so the loop draws exactly once for it.
+        // The whole backlog is drained into this one batch.
         assert!(matches!(
             receiver.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -235,12 +248,12 @@ mod tests {
     }
 
     #[test]
-    fn test_audio_and_mouse_alone_do_not_draw() {
+    fn test_audio_and_mouse_alone_have_no_tick() {
         let (sender, receiver) = mpsc::channel();
         sender.send(Event::AudioBars(vec![0.5])).unwrap();
         sender
             .send(Event::Mouse(MouseEvent {
-                kind: ratatui::crossterm::event::MouseEventKind::Moved,
+                kind: MouseEventKind::Moved,
                 column: 0,
                 row: 0,
                 modifiers: KeyModifiers::NONE,
@@ -250,7 +263,7 @@ mod tests {
 
         let batch = next_batch(&receiver).unwrap();
 
-        assert!(!batch.needs_draw());
+        assert!(!batch.has_tick());
         assert_eq!(batch.latest_bars, Some(vec![0.5]));
         assert!(batch.events.is_empty());
     }

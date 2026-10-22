@@ -8,7 +8,7 @@ The project's agent instructions live in `AGENTS.md` and are the single source o
 
 ## Notes for Claude Code
 
-- Inline `#[cfg(test)]` modules exist in `app.rs`, `audio_processor.rs`, `event.rs`, `sound_device.rs`, and `lib.rs`. Tests in `lib.rs` only run under the lib harness; the others are compiled into both lib and bin, which is why `cargo test --lib` is preferred.
+- Inline `#[cfg(test)]` modules exist in `app.rs`, `audio_processor.rs`, `event.rs`, `sound_device.rs`, `update.rs`, and `lib.rs`. Tests in `lib.rs` only run under the lib harness; the others are compiled into both lib and bin, which is why `cargo test --lib` is preferred.
 - `cargo run` needs a real interactive terminal, so it can't be meaningfully verified from a non-TTY tool shell. Rely on `cargo test --lib` and `cargo clippy --all-targets` for verification.
 - When behavior described in `AGENTS.md` changes (device filtering, key bindings, DSP constants), update `AGENTS.md` in the same change.
 
