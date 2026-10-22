@@ -24,6 +24,7 @@ use color_eyre::Result;
 use event::{Event, EventHandler};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use sound_device::{DeviceListUpdate, SoundDevice};
+use std::io::BufWriter;
 use tui::Tui;
 use update::{AppAction, update};
 
@@ -76,72 +77,87 @@ fn main() -> Result<()> {
     }
 
     // Initialize terminal user interface
-    let backend = CrosstermBackend::new(std::io::stderr());
+    // stderr is unbuffered; without a BufWriter every queued crossterm command becomes its own
+    // console write, which makes each frame slow on Windows.
+    let backend = CrosstermBackend::new(BufWriter::new(std::io::stderr()));
     let terminal = Terminal::new(backend)?;
     let mut tui = Tui::new(terminal, events);
     tui.enter()?;
 
     // Main application loop
+    tui.draw(&mut app)?;
     while !app.should_quit {
-        // Render the user interface
-        tui.draw(&mut app)?;
+        // Handle everything queued since the last iteration before rendering, so a slow draw
+        // can never leave a growing backlog of input and audio events behind it.
+        let batch = tui.events.next_batch()?;
+        let needs_draw = batch.needs_draw();
 
-        // Wait for and process the next event
-        match tui.events.next()? {
-            Event::Tick => {
-                app.tick();
-                if let Some(ref mut dev) = sound_device
-                    && let Some(update) =
-                        dev.poll_device_changes(app.selected_device_idx, &audio_sender, 32, 2.5)
-                {
-                    apply_device_update(&mut app, update);
-                }
-            }
-            Event::Key(key_event) => {
-                if let Some(action) = update(&mut app, key_event) {
-                    match action {
-                        AppAction::ChangeDevice(new_idx) => {
-                            if let Some(ref mut dev) = sound_device {
-                                match dev.switch_device(new_idx, audio_sender.clone(), 32, 2.5) {
-                                    Ok(()) => {
-                                        app.active_device_idx = new_idx;
-                                        app.clear_audio_error();
+        if let Some(bars) = batch.latest_bars {
+            // Update application state with bars calculated by realfft
+            app.update_audio_bars(bars);
+        }
+
+        for event in batch.events {
+            match event {
+                Event::Key(key_event) => {
+                    if let Some(action) = update(&mut app, key_event) {
+                        match action {
+                            AppAction::ChangeDevice(new_idx) => {
+                                if let Some(ref mut dev) = sound_device {
+                                    match dev.switch_device(new_idx, audio_sender.clone(), 32, 2.5)
+                                    {
+                                        Ok(()) => {
+                                            app.active_device_idx = new_idx;
+                                            app.clear_audio_error();
+                                        }
+                                        Err(e) => {
+                                            app.set_audio_error(format!(
+                                                "Failed to switch audio device: {e}"
+                                            ));
+                                        }
                                     }
-                                    Err(e) => {
-                                        app.set_audio_error(format!(
-                                            "Failed to switch audio device: {e}"
-                                        ));
-                                    }
+                                } else {
+                                    app.set_audio_error("No audio output device available");
                                 }
-                            } else {
-                                app.set_audio_error("No audio output device available");
                             }
                         }
                     }
                 }
-            }
-            Event::AudioBars(bars) => {
-                // Update application state with bars calculated by realfft
-                app.update_audio_bars(bars);
-            }
-            Event::AudioError(message) => {
-                app.set_audio_error(message);
-            }
-            Event::AudioDeviceLost => {
-                if let Some(ref mut dev) = sound_device {
-                    let update = dev.recover_from_device_loss(
-                        app.selected_device_idx,
-                        &audio_sender,
-                        32,
-                        2.5,
-                    );
-                    apply_device_update(&mut app, update);
-                } else {
-                    app.set_audio_error("No audio output device available");
+                Event::AudioError(message) => {
+                    app.set_audio_error(message);
                 }
+                Event::AudioDeviceLost => {
+                    if let Some(ref mut dev) = sound_device {
+                        let update = dev.recover_from_device_loss(
+                            app.selected_device_idx,
+                            &audio_sender,
+                            32,
+                            2.5,
+                        );
+                        apply_device_update(&mut app, update);
+                    } else {
+                        app.set_audio_error("No audio output device available");
+                    }
+                }
+                // Collapsed into the batch counters by `EventBatch::push`.
+                Event::Tick | Event::AudioBars(_) | Event::Mouse(_) | Event::Resize(_, _) => {}
             }
-            Event::Mouse(_) => {}
-            Event::Resize(_, _) => {}
+        }
+
+        for _ in 0..batch.ticks {
+            app.tick();
+        }
+        if batch.ticks > 0
+            && let Some(ref mut dev) = sound_device
+            && let Some(update) =
+                dev.poll_device_changes(app.selected_device_idx, &audio_sender, 32, 2.5)
+        {
+            apply_device_update(&mut app, update);
+        }
+
+        // Render the user interface once per batch, on the tick cadence
+        if needs_draw && !app.should_quit {
+            tui.draw(&mut app)?;
         }
     }
 

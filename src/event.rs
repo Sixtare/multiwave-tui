@@ -52,6 +52,49 @@ fn forward_terminal_event(
     }
 }
 
+/// Events drained from the channel in one main loop iteration.
+///
+/// The main loop renders once per batch instead of once per event. Rendering per event lets the
+/// queue grow without bound whenever a draw is slower than the combined tick and audio rate
+/// (common on Windows consoles), so input and bars lag further behind the longer the app runs.
+#[derive(Debug, Default)]
+pub struct EventBatch {
+    /// Number of ticks received; each one advances the animation by one step.
+    pub ticks: u32,
+    /// Most recent audio bars; older frames in the same batch are superseded.
+    pub latest_bars: Option<Vec<f32>>,
+    /// Events that must be handled individually, in arrival order.
+    pub events: Vec<Event>,
+}
+
+impl EventBatch {
+    /// Adds an event to the batch, collapsing the ones that only matter as the latest value.
+    pub fn push(&mut self, event: Event) {
+        match event {
+            Event::Tick => self.ticks += 1,
+            Event::AudioBars(bars) => self.latest_bars = Some(bars),
+            // Mouse input is unused and ratatui picks up the new size on the next draw.
+            Event::Mouse(_) | Event::Resize(_, _) => {}
+            other => self.events.push(other),
+        }
+    }
+
+    /// Returns true when the batch contains a tick, so rendering stays on the tick cadence.
+    pub fn needs_draw(&self) -> bool {
+        self.ticks > 0
+    }
+}
+
+/// Blocks for the next event, then drains everything already queued into a single batch.
+fn next_batch(receiver: &mpsc::Receiver<Event>) -> Result<EventBatch> {
+    let mut batch = EventBatch::default();
+    batch.push(receiver.recv()?);
+    while let Ok(event) = receiver.try_recv() {
+        batch.push(event);
+    }
+    Ok(batch)
+}
+
 /// Terminal event handler.
 #[derive(Debug)]
 pub struct EventHandler {
@@ -109,12 +152,12 @@ impl EventHandler {
         self.sender.clone()
     }
 
-    /// Receive the next event from the handler thread.
+    /// Receive every pending event from the handler thread as one batch.
     ///
     /// This function will always block the current thread if
     /// there is no data available and it's possible for more data to be sent.
-    pub fn next(&self) -> Result<Event> {
-        Ok(self.receiver.recv()?)
+    pub fn next_batch(&self) -> Result<EventBatch> {
+        next_batch(&self.receiver)
     }
 }
 
@@ -150,6 +193,66 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_batch_keeps_keys_and_latest_bars_with_one_draw() {
+        let (sender, receiver) = mpsc::channel();
+        for level in 0..50 {
+            sender.send(Event::AudioBars(vec![level as f32])).unwrap();
+        }
+        sender
+            .send(Event::Key(KeyEvent::new(
+                KeyCode::Char('s'),
+                KeyModifiers::NONE,
+            )))
+            .unwrap();
+        sender.send(Event::Tick).unwrap();
+        sender
+            .send(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))
+            .unwrap();
+        sender.send(Event::Tick).unwrap();
+
+        let batch = next_batch(&receiver).unwrap();
+
+        assert!(batch.needs_draw());
+        assert_eq!(batch.ticks, 2);
+        assert_eq!(batch.latest_bars, Some(vec![49.0]));
+        let keys: Vec<KeyCode> = batch
+            .events
+            .iter()
+            .map(|event| match event {
+                Event::Key(key) => key.code,
+                other => panic!("unexpected event: {other:?}"),
+            })
+            .collect();
+        assert_eq!(keys, vec![KeyCode::Char('s'), KeyCode::Down]);
+        // The whole backlog fits in one batch, so the loop draws exactly once for it.
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn test_audio_and_mouse_alone_do_not_draw() {
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Event::AudioBars(vec![0.5])).unwrap();
+        sender
+            .send(Event::Mouse(MouseEvent {
+                kind: ratatui::crossterm::event::MouseEventKind::Moved,
+                column: 0,
+                row: 0,
+                modifiers: KeyModifiers::NONE,
+            }))
+            .unwrap();
+        sender.send(Event::Resize(80, 24)).unwrap();
+
+        let batch = next_batch(&receiver).unwrap();
+
+        assert!(!batch.needs_draw());
+        assert_eq!(batch.latest_bars, Some(vec![0.5]));
+        assert!(batch.events.is_empty());
     }
 
     #[test]
