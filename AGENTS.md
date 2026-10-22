@@ -9,6 +9,7 @@ Ratatui terminal audio visualizer (Rust, edition 2024). Captures system output a
 - `cargo test --lib <filter>` — run one test, e.g. `cargo test --lib app::tests::test_app_gain_adjustment`.
 - `cargo test --lib -- --skip test_sound_device_filtered_list` — headless-safe run. That test asserts at least one real output device exists and fails on machines without audio hardware.
 - Linux builds need ALSA headers and pkg-config (`libasound2-dev`, `pkg-config`) for `alsa-sys`.
+- Windows builds use the default cpal WASAPI backend and need no extra system packages beyond the Rust MSVC toolchain.
 - Full check: `cargo fmt --check && cargo clippy --all-targets && cargo test --lib -- --skip test_sound_device_filtered_list`.
 
 ## Architecture & Code Conventions
@@ -17,15 +18,18 @@ Ratatui terminal audio visualizer (Rust, edition 2024). Captures system output a
 - `src/main.rs` is the entrypoint and redeclares every module itself; `src/lib.rs` repeats that list so tests compile without `main`. When adding a module, register it in **both** files.
 - `main.rs` owns the event loop and the `SoundDevice`; `App` only holds pure UI state and device name strings. `update()` mutates `App` and returns `AppAction::ChangeDevice`, and `main` performs the hardware switch afterward. Keep audio hardware side effects out of `App` and `update`.
 - `event::EventHandler` runs a crossterm polling thread and emits `Event::Tick` every ~16 ms (60 FPS); the cpal callback sends `Event::AudioBars` through the same mpsc channel.
-- `sound_device.rs` captures the output **sink monitor**, not a microphone: `init_capture_env()` sets `PIPEWIRE_ALSA` / `PULSE_SOURCE` only if unset. Runtime needs PipeWire or PulseAudio; don't overwrite those variables when the user already set them.
-- `sound_device.rs` filters out technical duplicate drivers (raw `hw:`), dummy sinks ("Discard all samples"), and unconfigured hardware ports, exposing only clean physical outputs and the auto-following default output.
+- `event::forward_terminal_event()` forwards key presses, mouse, and resize events, and deliberately ignores `FocusGained`/`FocusLost`. Windows always emits focus events and they cannot be disabled; never panic on an unhandled crossterm variant, because killing the event thread leaves audio bars flowing while the UI stops responding to keys.
+- `Tui::reset()` disables mouse capture before raw mode: on Windows, `DisableMouseCapture` restores the console input-mode snapshot taken while raw mode was active, so it must run before `disable_raw_mode()`.
+- `sound_device.rs` captures the output **sink monitor**, not a microphone. On Linux, `init_capture_env()` sets `PIPEWIRE_ALSA` / `PULSE_SOURCE` only if unset; don't overwrite those variables when the user already set them. On Windows, cpal uses WASAPI loopback automatically when a render endpoint is opened as an input stream.
+- On Linux, `sound_device.rs` filters out global ALSA plugin aliases (anything without `:CARD=` in its PCM id), technical duplicate drivers (raw `hw:`), dummy sinks ("Discard all samples"), and unconfigured hardware ports. On Windows it deduplicates active render endpoints by cpal `DeviceId`, because different endpoints may share the same friendly name.
+- `SoundDevice` polls the default output every second on Windows, rebuilds capture when the selected "Default Output" changes, and falls back to the current default if an explicitly selected endpoint disappears. `Event::AudioDeviceLost` triggers that recovery path.
 - `App::tick()` decays targets and applies attack/decay smoothing; `App::displayed_bars()` applies gain. Use these for rendering instead of mutating raw bar values for display-only effects.
 
 ## DSP & Audio Pipeline (`src/audio_processor.rs`)
 
-- Interleaved audio is downmixed to mono `(L + R) / 2` and buffered into chunks of 1024 samples.
+- Interleaved audio is downmixed to mono `(L + R) / 2` and buffered into chunks of 1024 samples. For multichannel layouts, only the front left/right channels are averaged so center/LFE/surround content does not dominate the bars.
 - Samples are multiplied by a Hann window before running forward FFT via `realfft`.
-- Output magnitudes are grouped into 32 log-spaced frequency bins (40 Hz to 16,000 Hz).
+- Output magnitudes are grouped into 32 log-spaced frequency bins (40 Hz to 16,000 Hz) using the stream's actual sample rate, not a fixed 44100 Hz value.
 - Bins combine average and peak magnitude (`0.5 * avg + 0.5 * max`) to preserve rapid transients (cymbals, snares) across wide treble ranges.
 - Frequency compensation curve (treble boost) scales linearly from `1.0x` on the lowest sub-bass bar up to `~6.0x` on the highest treble bar to counterbalance natural 1/f energy roll-off without reducing bass response.
 
