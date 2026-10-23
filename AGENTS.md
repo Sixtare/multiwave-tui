@@ -4,8 +4,8 @@ Ratatui terminal audio visualizer (Rust, edition 2024). Captures system output a
 
 ## Commands
 
-- `cargo run` — the TUI writes to **stderr** (`CrosstermBackend::new(std::io::stderr())`), so run it in a real terminal and don't pipe stdout to inspect it. It still launches when audio capture is unavailable, just without bars.
-- `cargo test --lib` — preferred test command. Inline tests in `src/app.rs` and `src/audio_processor.rs` are reachable from both `main.rs` and `lib.rs`; plain `cargo test` runs them twice (lib + bin harness).
+- `cargo run` — the TUI writes to **stderr** (`CrosstermBackend` over a buffered `std::io::stderr()`), so run it in a real terminal and don't pipe stdout to inspect it. It still launches when audio capture is unavailable, just without bars.
+- `cargo test --lib` — preferred test command. Inline tests in `src/app.rs`, `src/audio_processor.rs`, `src/event.rs`, `src/sound_device.rs`, and `src/update.rs` are reachable from both `main.rs` and `lib.rs`; plain `cargo test` runs them twice (lib + bin harness). Tests in `src/lib.rs` only run under the lib harness.
 - `cargo test --lib <filter>` — run one test, e.g. `cargo test --lib app::tests::test_app_gain_adjustment`.
 - `cargo test --lib -- --skip test_sound_device_filtered_list` — headless-safe run. That test asserts at least one real output device exists and fails on machines without audio hardware.
 - Linux builds need ALSA headers and pkg-config (`libasound2-dev`, `pkg-config`) for `alsa-sys`.
@@ -16,8 +16,10 @@ Ratatui terminal audio visualizer (Rust, edition 2024). Captures system output a
 
 - **Language:** All source code comments, docstrings, and error messages must be kept in **English**.
 - `src/main.rs` is the entrypoint and redeclares every module itself; `src/lib.rs` repeats that list so tests compile without `main`. When adding a module, register it in **both** files.
-- `main.rs` owns the event loop and the `SoundDevice`; `App` only holds pure UI state and device name strings. `update()` mutates `App` and returns `AppAction::ChangeDevice`, and `main` performs the hardware switch afterward. Keep audio hardware side effects out of `App` and `update`.
+- `main.rs` owns the event loop and the `SoundDevice`; `App` only holds pure UI state and device name strings. `update()` / `apply_batch()` mutate `App` and return `AppAction`s (`ChangeDevice`, `RecoverLostDevice`, `PollDevices`), and `main` performs the hardware work afterward. Keep audio hardware side effects out of `App` and `update`.
 - `event::EventHandler` runs a crossterm polling thread and emits `Event::Tick` every ~16 ms (60 FPS); the cpal callback sends `Event::AudioBars` through the same mpsc channel.
+- The main loop calls `EventHandler::next_batch()`, which blocks for one event and drains the rest into an `EventBatch` (tick count, latest bars only, `BatchEvent`s in order). `update::apply_batch()` applies it and returns a `BatchOutcome`; `main` runs the actions and draws only when the batch had a tick. Once an event quits, the rest of the batch is discarded. Never go back to drawing per event: when a draw is slower than the tick + audio rate (Windows consoles), the channel backlog grows without bound and input lags further and further.
+- The terminal backend writes to a 256 KiB `BufWriter<Stderr>` (`OUTPUT_BUFFER_CAPACITY`); unbuffered stderr turns every crossterm command into its own console write, and the default 8 KiB splits large frames.
 - `event::forward_terminal_event()` forwards key presses, mouse, and resize events, and deliberately ignores `FocusGained`/`FocusLost`. Windows always emits focus events and they cannot be disabled; never panic on an unhandled crossterm variant, because killing the event thread leaves audio bars flowing while the UI stops responding to keys.
 - `Tui::reset()` disables mouse capture before raw mode: on Windows, `DisableMouseCapture` restores the console input-mode snapshot taken while raw mode was active, so it must run before `disable_raw_mode()`.
 - `sound_device.rs` captures the output **sink monitor**, not a microphone. On Linux, `init_capture_env()` sets `PIPEWIRE_ALSA` / `PULSE_SOURCE` only if unset; don't overwrite those variables when the user already set them. On Windows, cpal uses WASAPI loopback automatically when a render endpoint is opened as an input stream.
