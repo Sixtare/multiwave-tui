@@ -115,7 +115,45 @@ fn update_color_picker(app: &mut App, key_event: KeyEvent) {
     }
 }
 
+/// Handles a key while the main menu is open.
+fn update_menu(app: &mut App, key_event: KeyEvent) {
+    match key_event.code {
+        KeyCode::Char('c') | KeyCode::Char('C') if key_event.modifiers == KeyModifiers::CONTROL => {
+            app.quit()
+        }
+        KeyCode::Esc => app.close_menu(),
+        KeyCode::Up | KeyCode::Char('k') => app.select_prev_menu_row(),
+        KeyCode::Down | KeyCode::Char('j') => app.select_next_menu_row(),
+        KeyCode::Char('o') | KeyCode::Char('O') => app.open_device_popup(),
+        KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
+        KeyCode::Char('s') | KeyCode::Char('S') => app.toggle_smoothing(),
+        KeyCode::Enter => match app.menu_row {
+            0 => app.open_device_popup(),
+            1 => app.open_color_popup(),
+            4 => app.toggle_smoothing(),
+            _ => {}
+        },
+        KeyCode::Left | KeyCode::Right => {
+            let forward = key_event.code == KeyCode::Right;
+            match (app.menu_row, forward) {
+                (2, true) => app.increase_gain(),
+                (2, false) => app.decrease_gain(),
+                (3, true) => app.increase_bar_count(),
+                (3, false) => app.decrease_bar_count(),
+                (4, _) => app.toggle_smoothing(),
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
+    if app.show_menu {
+        update_menu(app, key_event);
+        return None;
+    }
+
     // The color popup previews on the bars, so it only touches `App` and needs no action.
     if app.show_color_popup {
         match key_event.code {
@@ -140,8 +178,8 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
     // If the device selection popup is open, handle navigation and confirmation
     if app.show_popup {
         match key_event.code {
-            KeyCode::Esc => {
-                app.show_popup = false;
+            KeyCode::Esc | KeyCode::Char('o') | KeyCode::Char('O') => {
+                app.close_device_popup();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 app.select_prev_device();
@@ -151,7 +189,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             }
             KeyCode::Enter => {
                 // Active index is updated only after the stream starts successfully.
-                app.show_popup = false;
+                app.close_device_popup();
                 return Some(AppAction::ChangeDevice(app.selected_device_idx));
             }
             KeyCode::Char('c') | KeyCode::Char('C')
@@ -170,9 +208,8 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('c') | KeyCode::Char('C') if key_event.modifiers == KeyModifiers::CONTROL => {
             app.quit()
         }
-        KeyCode::Esc => {
-            app.show_popup = true;
-        }
+        KeyCode::Esc => app.open_menu(),
+        KeyCode::Char('o') | KeyCode::Char('O') => app.open_device_popup(),
         KeyCode::Char('s') => app.toggle_smoothing(),
         KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Right | KeyCode::Char('l') => app.increase_bar_count(),
@@ -374,7 +411,7 @@ mod tests {
     #[test]
     fn test_c_is_swallowed_by_the_device_popup_and_ctrl_c_quits_from_the_color_popup() {
         let mut app = App::new();
-        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('o'));
         press(&mut app, KeyCode::Char('c'));
         assert!(!app.show_color_popup);
 
@@ -395,7 +432,7 @@ mod tests {
             &mut app,
             batch_of(vec![
                 Event::AudioDeviceLost,
-                key(KeyCode::Esc),
+                key(KeyCode::Char('o')),
                 key(KeyCode::Down),
                 key(KeyCode::Enter),
             ]),
@@ -432,7 +469,10 @@ mod tests {
     fn test_esc_opens_and_closes_the_popup_and_q_quits() {
         let mut app = App::with_devices(vec!["A".into()], 0);
 
-        update(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        update(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
+        );
         assert!(app.show_popup && !app.should_quit);
 
         // `s` is swallowed while the popup is open.
@@ -450,6 +490,70 @@ mod tests {
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
         );
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_esc_opens_the_menu_and_closes_it() {
+        let mut app = App::with_devices(vec!["A".into()], 0);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.show_menu && !app.show_popup);
+
+        // Keys of the closed screen are swallowed, `i` and `l` do nothing.
+        press(&mut app, KeyCode::Char('l'));
+        press(&mut app, KeyCode::Char('q'));
+        assert_eq!(app.bar_count, 32);
+        assert!(!app.should_quit);
+
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.show_menu);
+    }
+
+    #[test]
+    fn test_menu_opens_submenus_and_comes_back() {
+        let mut app = App::with_devices(vec!["A".into()], 0);
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.show_popup && !app.show_menu);
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.show_popup && app.show_menu);
+
+        press(&mut app, KeyCode::Char('c'));
+        assert!(app.show_color_popup && !app.show_menu);
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.show_color_popup && app.show_menu);
+
+        // Opened by the direct shortcut, a popup closes everything.
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('o'));
+        press(&mut app, KeyCode::Char('o'));
+        assert!(!app.show_popup && !app.show_menu);
+    }
+
+    #[test]
+    fn test_menu_edits_sensitivity_bars_and_smoothing() {
+        let mut app = App::new();
+        app.set_terminal_width(200);
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.gain, 1.1);
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.gain, 0.9);
+
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.bar_count, 40);
+
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.smoothing);
+        press(&mut app, KeyCode::Char('s'));
+        assert!(!app.smoothing);
+
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.menu_row, 0);
     }
 
     #[test]

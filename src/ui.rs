@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, COLUMNS_PER_BAR},
+    app::{App, COLUMNS_PER_BAR, MENU_ROWS},
     audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
     palette::{BarColor, Palette},
@@ -26,6 +26,8 @@ pub struct FrameState {
     size: Size,
     /// Displayed bars; left empty while the popup hides the visualizer.
     bars: Vec<f32>,
+    show_menu: bool,
+    menu_row: usize,
     show_popup: bool,
     devices: Vec<String>,
     selected_device_idx: usize,
@@ -58,6 +60,8 @@ impl FrameState {
             } else {
                 app.audio_bars.clone()
             },
+            show_menu: app.show_menu,
+            menu_row: app.menu_row,
             show_popup: app.show_popup,
             devices: app.devices.clone(),
             selected_device_idx: app.selected_device_idx,
@@ -81,6 +85,9 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     match app.show_popup {
         false => {
             draw_soundwave(frame, frame.area(), &app.audio_bars, &app.palette, app.gain);
+            if app.show_menu {
+                render_menu(frame, app);
+            }
             if app.show_color_popup {
                 render_color_popup(frame, app);
             }
@@ -268,6 +275,8 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
 
 /// Width of the color popup, and of the color picker box beside it: the square, a gap, the hue
 /// strip and its marker, plus the borders.
+/// Width of the main menu box.
+const MENU_WIDTH: u16 = 40;
 const POPUP_WIDTH: u16 = 34;
 const PICKER_WIDTH: u16 = SQUARE_COLS as u16 + 1 + 2 + 1 + 2;
 /// Height of the color picker box: the square, a blank line and the hex line, plus the borders.
@@ -276,6 +285,64 @@ const PICKER_HEIGHT: u16 = SQUARE_ROWS as u16 + 2 + 2;
 /// Draws the bar color popup over the visualizer, which keeps moving as a live preview.
 ///
 /// While a row's color picker is open it is drawn in a second box to the right.
+/// Draws the main menu: every option with its current value and the key that reaches it directly.
+fn render_menu(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let width = MENU_WIDTH.min(area.width);
+    let height = (MENU_ROWS as u16 + 2).min(area.height);
+    let menu_area = area.centered(Constraint::Length(width), Constraint::Length(height));
+    if menu_area.width < 3 || menu_area.height < 3 {
+        return;
+    }
+
+    let block = Block::bordered()
+        .title(" Menu ")
+        .title_alignment(Alignment::Center)
+        .title_bottom(Line::from(" Enter open  Esc close ").centered())
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(menu_area);
+    frame.render_widget(Clear, menu_area);
+    frame.render_widget(block, menu_area);
+
+    let rows = [
+        ("Output device", String::new(), "O"),
+        ("Bar color", app.palette.mode.label().to_string(), "C"),
+        ("Sensitivity", format!("◀ {:.2}x ▶", app.gain), "↑/↓"),
+        ("Bars", format!("◀ {} ▶", app.bar_count), "←/→"),
+        (
+            "Smoothing",
+            (if app.smoothing { "on" } else { "off" }).to_string(),
+            "S",
+        ),
+    ];
+    let lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .map(|(row, (label, value, shortcut))| {
+            let selected = row == app.menu_row;
+            let style = if selected {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let left = format!(
+                "{} {:<14}{}",
+                if selected { ">" } else { " " },
+                label,
+                value
+            );
+            let pad = (inner.width as usize)
+                .saturating_sub(left.chars().count() + shortcut.chars().count() + 1);
+            Line::from(vec![
+                Span::styled(left, style),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(*shortcut, Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 fn render_color_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let palette = &app.palette;
@@ -692,6 +759,35 @@ mod tests {
         assert_eq!(
             FrameState::capture(&app, SIZE),
             FrameState::capture(&app, SIZE)
+        );
+    }
+
+    #[test]
+    fn test_menu_shows_every_option_with_its_shortcut() {
+        let mut app = App::new();
+        app.open_menu();
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = (0..12)
+            .flat_map(|y| (0..60).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+            .collect();
+        for expected in [
+            "Output device",
+            "Bar color",
+            "Sensitivity",
+            "1.00x",
+            "Bars",
+            "Smoothing",
+            "↑/↓",
+            "←/→",
+        ] {
+            assert!(text.contains(expected), "{expected}");
+        }
+        assert_ne!(
+            FrameState::capture(&app, SIZE),
+            FrameState::capture(&App::new(), SIZE)
         );
     }
 
