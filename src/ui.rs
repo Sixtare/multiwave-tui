@@ -41,7 +41,7 @@ impl FrameState {
             bars: if app.show_popup {
                 Vec::new()
             } else {
-                app.displayed_bars()
+                app.audio_bars.clone()
             },
             show_popup: app.show_popup,
             devices: app.devices.clone(),
@@ -57,7 +57,7 @@ impl FrameState {
 
 pub fn render(app: &mut App, frame: &mut Frame) {
     match app.show_popup {
-        false => draw_soundwave(frame, frame.area(), &app.displayed_bars()),
+        false => draw_soundwave(frame, frame.area(), &app.audio_bars),
         // Uses the full screen, centering the visualizer vertically and horizontally
         true => render_popup(frame, app),
     }
@@ -464,7 +464,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         let top_row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
-        assert!(top_row.ends_with(" sensitivity 1.50x "), "{top_row:?}");
+        assert!(top_row.ends_with(" sensitivity 1.20x "), "{top_row:?}");
         assert_eq!(buffer[(39, 0)].fg, Color::Cyan);
         assert_eq!(buffer[(39, 0)].bg, Color::Reset);
     }
@@ -482,7 +482,7 @@ mod tests {
 
         let row = |y: u16| -> String { (0..40).map(|x| buffer[(x, y)].symbol()).collect() };
         assert!(row(0).ends_with(" 32 bars "), "{:?}", row(0));
-        assert!(row(1).ends_with(" sensitivity 1.25x "), "{:?}", row(1));
+        assert!(row(1).ends_with(" sensitivity 1.10x "), "{:?}", row(1));
     }
 
     #[test]

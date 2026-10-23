@@ -28,8 +28,6 @@ use std::io::BufWriter;
 use tui::Tui;
 use update::{AppAction, apply_batch};
 
-/// Gain the audio processor applies to normalized FFT magnitudes.
-const CAPTURE_GAIN: f32 = 2.5;
 /// Sized to hold a typical full-screen frame, so a draw reaches the console in a few writes.
 /// The default 8 KiB would split a frame full of color escapes into many writes again.
 const OUTPUT_BUFFER_CAPACITY: usize = 256 * 1024;
@@ -65,7 +63,7 @@ fn main() -> Result<()> {
     let mut startup_error = None;
     let (device_names, active_idx) = match sound_device.as_mut() {
         Some(dev) => {
-            if let Err(e) = dev.start_capture(audio_sender.clone(), CAPTURE_GAIN) {
+            if let Err(e) = dev.start_capture(audio_sender.clone()) {
                 startup_error = Some(format!("Failed to start audio stream: {e}"));
             }
             (dev.device_names(), dev.active_idx)
@@ -105,7 +103,7 @@ fn main() -> Result<()> {
             match action {
                 AppAction::ChangeDevice(new_idx) => {
                     if let Some(ref mut dev) = sound_device {
-                        match dev.switch_device(new_idx, audio_sender.clone(), CAPTURE_GAIN) {
+                        match dev.switch_device(new_idx, audio_sender.clone()) {
                             Ok(()) => {
                                 app.active_device_idx = new_idx;
                                 app.clear_audio_error();
@@ -123,13 +121,15 @@ fn main() -> Result<()> {
                         dev.set_num_bars(count);
                     }
                 }
+                AppAction::SetGain(gain) => {
+                    if let Some(ref dev) = sound_device {
+                        dev.set_gain(gain);
+                    }
+                }
                 AppAction::RecoverLostDevice => {
                     if let Some(ref mut dev) = sound_device {
-                        let update = dev.recover_from_device_loss(
-                            app.selected_device_idx,
-                            &audio_sender,
-                            CAPTURE_GAIN,
-                        );
+                        let update =
+                            dev.recover_from_device_loss(app.selected_device_idx, &audio_sender);
                         apply_device_update(&mut app, update);
                     } else {
                         app.set_audio_error("No audio output device available");
@@ -137,11 +137,8 @@ fn main() -> Result<()> {
                 }
                 AppAction::PollDevices => {
                     if let Some(ref mut dev) = sound_device
-                        && let Some(update) = dev.poll_device_changes(
-                            app.selected_device_idx,
-                            &audio_sender,
-                            CAPTURE_GAIN,
-                        )
+                        && let Some(update) =
+                            dev.poll_device_changes(app.selected_device_idx, &audio_sender)
                     {
                         apply_device_update(&mut app, update);
                     }
