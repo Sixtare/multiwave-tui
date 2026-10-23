@@ -6,12 +6,12 @@ pub const SQUARE_ROWS: usize = 10;
 /// Rows of the hue strip, which is as tall as the square.
 pub const HUE_ROWS: usize = SQUARE_ROWS;
 
-/// Step of one key press, small enough to tell neighbouring shades apart (the hue goes in 10
-/// degree steps, so red and pink are several presses apart) while each press still changes the
-/// swatch, the square's colors and the bars. Holding Shift divides it by [`FINE`] for precise
-/// picks.
-const SATURATION_STEP: f32 = 0.025;
-const VALUE_STEP: f32 = 0.05;
+/// Step of one key press. Saturation and value move the square's cursor exactly one cell, so
+/// every press visibly moves it. The hue goes in 10 degree steps, small enough to tell
+/// neighbouring shades apart (red and pink are several presses apart); the square's colors
+/// change with it. Holding Shift divides every step by [`FINE`] for precise picks.
+const SATURATION_STEP: f32 = 1.0 / (SQUARE_COLS - 1) as f32;
+const VALUE_STEP: f32 = 1.0 / (SQUARE_ROWS - 1) as f32;
 const HUE_STEP: f32 = 10.0;
 const FINE: f32 = 5.0;
 
@@ -108,15 +108,17 @@ mod tests {
     }
 
     #[test]
-    fn test_two_presses_move_the_square_cursor_one_cell() {
+    fn test_every_press_moves_the_square_cursor_one_cell() {
         let mut picker = ColorPicker::new(BarColor::rgb(255, 0, 0));
         let (col, row) = picker.square_cursor();
-        picker.nudge(-1, 1, false);
-        picker.nudge(-1, 1, false);
-        assert_eq!(picker.square_cursor(), (col - 1, row + 1));
-        picker.nudge(-1, 1, false);
-        picker.nudge(-1, 1, false);
-        assert_eq!(picker.square_cursor(), (col - 2, row + 2));
+        for presses in 1..=5 {
+            picker.nudge(-1, 1, false);
+            assert_eq!(picker.square_cursor(), (col - presses, row + presses));
+        }
+        for presses in (0..5).rev() {
+            picker.nudge(1, -1, false);
+            assert_eq!(picker.square_cursor(), (col - presses, row + presses));
+        }
     }
 
     #[test]
