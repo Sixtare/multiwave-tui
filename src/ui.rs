@@ -301,7 +301,13 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
                 Some(color) => color_value(color, text_style),
                 None if row == Palette::MIRROR_ROW => {
                     let mark = if palette.mirror_dimmed { "x" } else { " " };
-                    vec![Span::styled(format!("[{mark}] Darker"), text_style)]
+                    // An active option is shown in green.
+                    let style = if palette.mirror_dimmed {
+                        text_style.fg(Color::Green)
+                    } else {
+                        text_style
+                    };
+                    vec![Span::styled(format!("[{mark}] Darker"), style)]
                 }
                 None => vec![Span::styled(
                     if palette.single_mode {
@@ -781,6 +787,21 @@ mod tests {
             .map(|(x, y)| buffer[(x, y)].symbol().to_string())
             .collect();
         assert!(text.contains("[ ] Darker"));
+        let darker_color = |buffer: &Buffer| {
+            let row = (0..24)
+                .find(|&y| (0..80).any(|x| buffer[(x, y)].symbol() == "D"))
+                .unwrap();
+            let x = (0..80).find(|&x| buffer[(x, row)].symbol() == "D").unwrap();
+            buffer[(x, row)].fg
+        };
+        // Off: the normal selected color. On: green.
+        assert_eq!(darker_color(buffer), Color::Cyan);
+        app.activate_color_row();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        assert_eq!(darker_color(terminal.backend().buffer()), Color::Green);
+        app.activate_color_row();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
         // The leftmost mirror cell has the same color as the bar above the divider.
         assert_eq!(buffer[(8, 23)].fg, Color::Cyan);
     }
