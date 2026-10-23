@@ -1,3 +1,8 @@
+use crate::{
+    color_picker::ColorPicker,
+    palette::{BarColor, Palette},
+};
+
 /// Fewest bars the visualizer shows, even on a terminal too narrow to fit them.
 pub const MIN_BARS: usize = 32;
 /// Most bars the visualizer shows, however wide the terminal is.
@@ -13,7 +18,7 @@ const GAIN_STEP: f32 = 0.10;
 /// Bar response with smoothing off: fast on both ways, applied on every audio frame and tick.
 const PLAIN_ATTACK_FACTOR: f32 = 0.65;
 const PLAIN_DECAY_FACTOR: f32 = 0.20;
-/// How long a bar count, sensitivity or smoothing notice stays on screen, in ticks (~1.5 s at
+/// How long a bar count, sensitivity, smoothing or color notice stays on screen, in ticks (~1.5 s at
 /// 60 FPS).
 const NOTICE_TICKS: u64 = 90;
 
@@ -36,6 +41,8 @@ pub struct App {
     gain_notice_until: u64,
     /// Tick until which the smoothing notice is shown.
     smoothing_notice_until: u64,
+    /// Tick until which the color notice is shown.
+    color_notice_until: u64,
     /// Vector containing normalized and smoothed audio bar magnitudes (0.0 to 1.0).
     pub audio_bars: Vec<f32>,
     /// Vector containing the target values most recently received from the FFT.
@@ -62,6 +69,18 @@ pub struct App {
     pub device_scroll_offset: usize,
     /// Most recent audio device or stream error, if any.
     pub audio_error: Option<String>,
+    /// How the bars are colored. While the color popup is open it holds the live preview.
+    pub palette: Palette,
+    /// Whether to display the bar color popup.
+    pub show_color_popup: bool,
+    /// Highlighted row of the color popup (0 is the mode row).
+    pub color_row: usize,
+    /// Palette from before the color popup opened, to tell whether it changed.
+    palette_at_open: Palette,
+    /// The color picker, while it is open for the highlighted row.
+    pub color_picker: Option<ColorPicker>,
+    /// Color of the edited row from before the color picker opened, restored when it is cancelled.
+    color_before_picker: BarColor,
 }
 
 impl Default for App {
@@ -75,6 +94,7 @@ impl Default for App {
             bar_notice_until: 0,
             gain_notice_until: 0,
             smoothing_notice_until: 0,
+            color_notice_until: 0,
             audio_bars: vec![0.0; MIN_BARS],
             target_bars: vec![0.0; MIN_BARS],
             gain: 1.0,
@@ -87,6 +107,12 @@ impl Default for App {
             active_device_idx: 0,
             device_scroll_offset: 0,
             audio_error: None,
+            palette: Palette::default(),
+            show_color_popup: false,
+            color_row: 0,
+            palette_at_open: Palette::default(),
+            color_picker: None,
+            color_before_picker: BarColor::CYAN,
         }
     }
 }
@@ -278,6 +304,69 @@ impl App {
         (self.tick_counter < self.smoothing_notice_until).then_some(self.smoothing)
     }
 
+    /// Opens the color popup.
+    pub fn open_color_popup(&mut self) {
+        self.palette_at_open = self.palette;
+        self.color_row = 0;
+        self.color_picker = None;
+        self.show_color_popup = true;
+    }
+
+    /// Closes the color popup, keeping every color chosen in it.
+    pub fn close_color_popup(&mut self) {
+        self.show_color_popup = false;
+        self.color_picker = None;
+        if self.palette != self.palette_at_open {
+            self.color_notice_until = self.tick_counter + NOTICE_TICKS;
+        }
+    }
+
+    /// Moves the color popup cursor down, skipping grayed-out rows.
+    pub fn select_next_color_row(&mut self) {
+        self.color_row = self.palette.next_row(self.color_row, true);
+    }
+
+    /// Moves the color popup cursor up, skipping grayed-out rows.
+    pub fn select_prev_color_row(&mut self) {
+        self.color_row = self.palette.next_row(self.color_row, false);
+    }
+
+    /// Acts on the highlighted row: flips the mode or the mirror checkbox, or opens the color
+    /// picker for a color row.
+    pub fn activate_color_row(&mut self) {
+        match self.color_row {
+            0 => self.palette.toggle_mode(),
+            Palette::MIRROR_ROW => self.palette.toggle_mirror_dimmed(),
+            _ => {
+                if let Some(color) = self.palette.row_color(self.color_row) {
+                    self.color_before_picker = color;
+                    self.color_picker = Some(ColorPicker::new(color));
+                }
+            }
+        }
+    }
+
+    /// Lets `edit` change the open color picker, then previews its color on the bars.
+    pub fn edit_color_picker(&mut self, edit: impl FnOnce(&mut ColorPicker)) {
+        if let Some(picker) = &mut self.color_picker {
+            edit(picker);
+            self.palette.set_row_color(self.color_row, picker.color());
+        }
+    }
+
+    /// Closes the color picker, keeping the previewed color when `confirm` and restoring otherwise.
+    pub fn close_color_picker(&mut self, confirm: bool) {
+        if self.color_picker.take().is_some() && !confirm {
+            self.palette
+                .set_row_color(self.color_row, self.color_before_picker);
+        }
+    }
+
+    /// The color choice to announce on screen right after the user confirmed it.
+    pub fn color_notice(&self) -> Option<String> {
+        (self.tick_counter < self.color_notice_until).then(|| self.palette.describe())
+    }
+
     /// The sensitivity to announce on screen right after the user changed it.
     pub fn gain_notice(&self) -> Option<f32> {
         (self.tick_counter < self.gain_notice_until).then_some(self.gain)
@@ -306,6 +395,88 @@ mod tests {
         let mut app = App::default();
         app.set_terminal_width(width);
         app
+    }
+
+    #[test]
+    fn test_color_picker_previews_and_cancel_restores_the_color() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.select_next_color_row();
+        app.activate_color_row();
+        assert_eq!(
+            app.color_picker.as_ref().map(|p| p.color()),
+            Some(BarColor::CYAN)
+        );
+        app.edit_color_picker(|picker| picker.nudge(-10, 5, false));
+        assert_ne!(app.palette.bands[0], BarColor::CYAN);
+        assert_eq!(
+            app.palette.bands[0],
+            app.color_picker.as_ref().unwrap().color()
+        );
+        app.close_color_picker(false);
+        assert_eq!(app.palette, Palette::default());
+        assert_eq!(app.color_picker, None);
+    }
+
+    #[test]
+    fn test_color_picker_confirm_keeps_the_color_and_closing_shows_a_notice() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.select_next_color_row();
+        app.activate_color_row();
+        app.edit_color_picker(|picker| {
+            picker.next_focus();
+            picker.nudge(0, 10, false);
+        });
+        let picked = app.color_picker.as_ref().unwrap().color();
+        assert_ne!(picked, BarColor::CYAN);
+        app.close_color_picker(true);
+        assert_eq!(app.palette.bands[0], picked);
+        assert_eq!(app.color_notice(), None);
+
+        app.close_color_popup();
+        assert_eq!(app.color_notice().as_deref(), Some("Gradient"));
+        for _ in 0..90 {
+            app.tick();
+        }
+        assert_eq!(app.color_notice(), None);
+    }
+
+    #[test]
+    fn test_closing_the_color_popup_unchanged_shows_no_notice() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.close_color_popup();
+        assert_eq!(app.color_notice(), None);
+    }
+
+    #[test]
+    fn test_mode_row_toggles_and_cursor_follows_the_row_count() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.select_prev_color_row();
+        assert_eq!(app.color_row, 4);
+        app.select_next_color_row();
+        assert_eq!(app.color_row, 0);
+        app.activate_color_row();
+        assert!(app.palette.single_mode);
+        assert_eq!(app.color_picker, None);
+        app.select_prev_color_row();
+        assert_eq!(app.color_row, 4);
+        app.select_prev_color_row();
+        assert_eq!(app.color_row, 1);
+    }
+
+    #[test]
+    fn test_mirror_row_toggles_the_checkbox_without_opening_the_list() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.select_prev_color_row();
+        app.activate_color_row();
+        assert!(!app.palette.mirror_dimmed);
+        assert_eq!(app.color_picker, None);
+        app.close_color_popup();
+        assert!(app.color_notice().is_some());
     }
 
     #[test]

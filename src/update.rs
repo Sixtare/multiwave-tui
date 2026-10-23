@@ -2,6 +2,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
     app::App,
+    color_picker::ColorPicker,
     event::{BatchEvent, EventBatch},
 };
 
@@ -38,6 +39,12 @@ pub struct BatchOutcome {
 pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
     let mut outcome = BatchOutcome::default();
     let has_tick = batch.has_tick();
+    // A key press is drawn right away instead of waiting for the next tick, so the UI answers
+    // input at once. Still one draw per batch, and never more than the batch had work for.
+    let has_key = batch
+        .events
+        .iter()
+        .any(|event| matches!(event, BatchEvent::Key(_)));
     let bar_count_before = app.bar_count;
     let gain_before = app.gain;
     let smoothing_before = app.smoothing;
@@ -86,13 +93,48 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
     }
     if has_tick {
         outcome.actions.push(AppAction::PollDevices);
-        outcome.draw = true;
     }
+    outcome.draw = has_tick || has_key;
 
     outcome
 }
 
+/// Handles a key while the color picker is open.
+fn update_color_picker(app: &mut App, key_event: KeyEvent) {
+    let fine = key_event.modifiers.contains(KeyModifiers::SHIFT);
+    match key_event.code {
+        KeyCode::Esc => app.close_color_picker(false),
+        KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_picker(false),
+        KeyCode::Enter => app.close_color_picker(true),
+        KeyCode::Tab => app.edit_color_picker(ColorPicker::next_focus),
+        KeyCode::Up | KeyCode::Char('k') => app.edit_color_picker(|p| p.nudge(0, -1, fine)),
+        KeyCode::Down | KeyCode::Char('j') => app.edit_color_picker(|p| p.nudge(0, 1, fine)),
+        KeyCode::Left => app.edit_color_picker(|p| p.nudge(-1, 0, fine)),
+        KeyCode::Right => app.edit_color_picker(|p| p.nudge(1, 0, fine)),
+        _ => {}
+    }
+}
+
 pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
+    // The color popup previews on the bars, so it only touches `App` and needs no action.
+    if app.show_color_popup {
+        match key_event.code {
+            KeyCode::Char('c') | KeyCode::Char('C')
+                if key_event.modifiers == KeyModifiers::CONTROL =>
+            {
+                app.quit();
+            }
+            // While the color picker is open it takes the keys, and Esc only closes the picker.
+            _ if app.color_picker.is_some() => update_color_picker(app, key_event),
+            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_popup(),
+            KeyCode::Enter => app.activate_color_row(),
+            KeyCode::Up | KeyCode::Char('k') => app.select_prev_color_row(),
+            KeyCode::Down | KeyCode::Char('j') => app.select_next_color_row(),
+            _ => {}
+        }
+        return None;
+    }
+
     // If the device selection popup is open, handle navigation and confirmation
     if app.show_popup {
         match key_event.code {
@@ -130,6 +172,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             app.show_popup = true;
         }
         KeyCode::Char('s') => app.toggle_smoothing(),
+        KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Right | KeyCode::Char('l') => app.increase_bar_count(),
         KeyCode::Left | KeyCode::Char('j') => app.decrease_bar_count(),
         KeyCode::Up | KeyCode::Char('i') => app.increase_gain(),
@@ -142,7 +185,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::Event;
+    use crate::{color_picker::PickerFocus, event::Event, palette::BarColor};
 
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
@@ -191,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_without_tick_does_not_draw() {
+    fn test_batch_with_a_key_draws_without_waiting_for_a_tick() {
         let mut app = App::new();
         app.set_terminal_width(200);
 
@@ -205,9 +248,128 @@ mod tests {
             outcome,
             BatchOutcome {
                 actions: vec![AppAction::SetBarCount(40)],
-                draw: false,
+                draw: true,
             }
         );
+    }
+
+    #[test]
+    fn test_audio_only_batch_without_tick_does_not_draw() {
+        let mut app = App::new();
+        app.set_terminal_width(200);
+
+        let outcome = apply_batch(&mut app, batch_of(vec![Event::AudioBars(vec![0.5; 32])]));
+
+        assert_eq!(outcome, BatchOutcome::default());
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        update(app, KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn test_c_opens_the_color_popup_and_swallows_other_keys() {
+        let mut app = App::new();
+        app.set_terminal_width(200);
+        press(&mut app, KeyCode::Char('c'));
+        assert!(app.show_color_popup);
+
+        press(&mut app, KeyCode::Char('s'));
+        press(&mut app, KeyCode::Char('q'));
+        press(&mut app, KeyCode::Right);
+        assert!(!app.smoothing);
+        assert!(!app.should_quit);
+        assert_eq!(app.bar_count, 32);
+
+        // Enter on the mode row switches to single color.
+        press(&mut app, KeyCode::Enter);
+        assert!(app.palette.single_mode);
+        assert_eq!(app.color_picker, None);
+    }
+
+    fn open_picker_on_bass(app: &mut App) {
+        press(app, KeyCode::Char('c'));
+        press(app, KeyCode::Down);
+        press(app, KeyCode::Enter);
+        assert!(app.color_picker.is_some());
+    }
+
+    #[test]
+    fn test_enter_opens_the_picker_and_arrows_preview_the_color() {
+        let mut app = App::new();
+        open_picker_on_bass(&mut app);
+
+        press(&mut app, KeyCode::Left);
+        let after_left = app.palette.bands[0];
+        assert_ne!(after_left, BarColor::CYAN);
+        // Shift moves in fine steps, smaller than the plain press.
+        let after_plain = app.palette.bands[0];
+        update(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        let fine = app.palette.bands[0];
+        assert_ne!(fine, after_plain);
+        assert!(fine.r.abs_diff(after_plain.r) < after_plain.r.abs_diff(BarColor::CYAN.r));
+        assert!(app.show_color_popup);
+        assert!(!app.smoothing);
+
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.color_picker, None);
+        assert!(app.show_color_popup);
+        let kept = app.palette.bands[0];
+
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.show_color_popup);
+        assert_eq!(app.palette.bands[0], kept);
+    }
+
+    #[test]
+    fn test_tab_moves_between_square_and_hue_strip() {
+        let mut app = App::new();
+        open_picker_on_bass(&mut app);
+
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.color_picker.as_ref().unwrap().focus, PickerFocus::Hue);
+        press(&mut app, KeyCode::Down);
+        assert_ne!(app.palette.bands[0], BarColor::CYAN);
+
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(
+            app.color_picker.as_ref().unwrap().focus,
+            PickerFocus::Square
+        );
+    }
+
+    #[test]
+    fn test_esc_and_c_close_only_the_picker_first() {
+        for closing in [KeyCode::Esc, KeyCode::Char('c')] {
+            let mut app = App::new();
+            open_picker_on_bass(&mut app);
+            press(&mut app, KeyCode::Down);
+            assert_ne!(app.palette.bands[0], BarColor::CYAN);
+            press(&mut app, closing);
+            assert!(app.show_color_popup);
+            assert_eq!(app.color_picker, None);
+            assert_eq!(app.palette, crate::palette::Palette::default());
+
+            press(&mut app, closing);
+            assert!(!app.show_color_popup);
+            assert!(!app.show_popup);
+        }
+    }
+
+    #[test]
+    fn test_c_is_swallowed_by_the_device_popup_and_ctrl_c_quits_from_the_color_popup() {
+        let mut app = App::new();
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('c'));
+        assert!(!app.show_color_popup);
+
+        let mut app = App::new();
+        press(&mut app, KeyCode::Char('c'));
+        update(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert!(app.should_quit);
     }
 
     #[test]
