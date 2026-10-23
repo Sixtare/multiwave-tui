@@ -316,7 +316,7 @@ fn render_menu(frame: &mut Frame, app: &App) {
         ("Bars", format!("◀ {} ▶", app.bar_count), "←/→"),
         (
             "Smoothing",
-            (if app.smoothing { "on" } else { "off" }).to_string(),
+            format!("◀ {} ▶", if app.smoothing { "on" } else { "off" }),
             "S",
         ),
     ];
