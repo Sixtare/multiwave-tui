@@ -12,6 +12,7 @@ use ratatui::{
 
 use crate::{
     app::{App, COLUMNS_PER_BAR},
+    audio_processor::PEAK_TARGET_HEIGHT,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
     palette::{BarColor, Palette},
 };
@@ -158,6 +159,9 @@ fn render_audio_error(frame: &mut Frame, message: &str) {
         status_area,
     );
 }
+
+/// How much the reflection is attenuated, for a more realistic mirror/water effect.
+const MIRROR_ATTENUATION: f32 = 0.85;
 
 // Characters for the upper bars (base-anchored)
 const WAVE_CHARS: &[char] = &[' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -521,15 +525,31 @@ impl Widget for Soundwave<'_> {
 
         // In vertical mode the color depends on the row, not on the bar, so it is worked out once
         // per row instead of once per cell.
-        let height_t = |row: usize, rows: usize| row as f32 / rows.saturating_sub(1).max(1) as f32;
+        // The loudest bars only reach `PEAK_TARGET_HEIGHT` (the mirror is attenuated on top of
+        // that), so the gradient ends there and the final color is reached at ordinary levels.
+        // The row of the final color is the topmost cell such a bar draws.
+        let height_t = |row: usize, rows: usize, full_height: f32| {
+            let last_row = (rows as f32 * full_height - 1.0).max(1.0);
+            (row as f32 / last_row).min(1.0)
+        };
         let (upper_row_colors, mirror_row_colors): (Vec<Color>, Vec<Color>) =
             if self.palette.is_vertical() {
                 (
                     (0..upper_rows)
-                        .map(|row| self.palette.height_color(height_t(row, upper_rows)).color())
+                        .map(|row| {
+                            self.palette
+                                .height_color(height_t(row, upper_rows, PEAK_TARGET_HEIGHT))
+                                .color()
+                        })
                         .collect(),
                     (0..mirror_rows)
-                        .map(|row| self.palette.mirror_height_color(height_t(row, mirror_rows)))
+                        .map(|row| {
+                            self.palette.mirror_height_color(height_t(
+                                row,
+                                mirror_rows,
+                                PEAK_TARGET_HEIGHT * MIRROR_ATTENUATION,
+                            ))
+                        })
                         .collect(),
                 )
             } else {
@@ -542,7 +562,7 @@ impl Widget for Soundwave<'_> {
             let mirror_color = self.palette.mirror_bar_color(i, bar_count);
             let normalized = amplitude.clamp(0.0, 1.0);
             // Slight reflection attenuation for a more realistic mirror/water effect
-            let mirror_amplitude = (amplitude * 0.85).clamp(0.0, 1.0);
+            let mirror_amplitude = (amplitude * MIRROR_ATTENUATION).clamp(0.0, 1.0);
 
             // 1. Upper Visualizer (grows upward from the center line to the top of the screen)
             for row in 0..upper_rows {
@@ -990,18 +1010,46 @@ mod tests {
         let column = |bar: u16, rows: std::ops::Range<u16>| -> Vec<Color> {
             rows.map(|y| buffer[(bar * 2, y)].fg).collect()
         };
-        // Top to bottom above the divider (row 5): treble, then back down to the base color.
+        // Top to bottom above the divider (row 5). The gradient ends at the height the loudest
+        // bars reach (0.75), so the top two rows already show the final color.
         let upper = column(0, 0..5);
         assert_eq!(upper[0], Color::Rgb(0, 0, 255));
-        assert_eq!(upper[2], Color::Rgb(0, 255, 0));
+        assert_eq!(upper[1], Color::Rgb(0, 0, 255));
         assert_eq!(upper[4], Color::Rgb(255, 0, 0));
+        // The rows in between are real blends.
+        assert_ne!(upper[2], upper[1]);
+        assert_ne!(upper[2], upper[3]);
+        assert_ne!(upper[3], upper[4]);
         // All bars share the same column of colors, unlike the horizontal modes.
         assert_eq!(column(0, 0..5), column(31, 0..5));
-        // The mirror repeats the blend going down, darker.
+        // The mirror repeats the blend going down, darker, and ends sooner since it is
+        // attenuated.
         let mirror = column(0, 6..11);
         assert_eq!(mirror[0], Color::Rgb(128, 0, 0));
-        assert_eq!(mirror[2], Color::Rgb(0, 128, 0));
+        assert_eq!(mirror[3], Color::Rgb(0, 0, 128));
         assert_eq!(mirror[4], Color::Rgb(0, 0, 128));
+    }
+
+    #[test]
+    fn test_vertical_final_color_is_reached_by_a_bar_at_the_peak_target() {
+        let palette = Palette {
+            mode: ColorMode::Vertical,
+            bands: [
+                BarColor::rgb(255, 0, 0),
+                BarColor::rgb(0, 255, 0),
+                BarColor::rgb(0, 0, 255),
+            ],
+            ..Palette::default()
+        };
+        let peak = crate::audio_processor::PEAK_TARGET_HEIGHT;
+        let buffer = render_bars_with(&[peak; 32], 64, 41, &palette);
+
+        // 20 rows above the divider; the bar's topmost visible cell is the final color.
+        let top_cell = (0..20)
+            .map(|y| &buffer[(0, y)])
+            .find(|cell| cell.symbol() != " ")
+            .unwrap();
+        assert_eq!(top_cell.fg, Color::Rgb(0, 0, 255));
     }
 
     #[test]

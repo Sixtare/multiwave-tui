@@ -33,7 +33,7 @@ const TILT_PIVOT_HZ: f32 = 1000.0;
 
 /// Height the automatic sensitivity holds the loudest bar at (1.0 is the top). The headroom above
 /// it is left for transients and for the manual sensitivity, so loud music doesn't fill the screen.
-const PEAK_TARGET_HEIGHT: f32 = 0.75;
+pub const PEAK_TARGET_HEIGHT: f32 = 0.75;
 
 /// Time constant, in seconds, of the smoothing applied to the treble bars' power. The short FFT
 /// gives independent, noisy frames, so without it the mids and highs jitter far more than the
