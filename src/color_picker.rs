@@ -6,10 +6,12 @@ pub const SQUARE_ROWS: usize = 10;
 /// Rows of the hue strip, which is as tall as the square.
 pub const HUE_ROWS: usize = SQUARE_ROWS;
 
-/// Step of one key press on saturation, value and hue; Shift multiplies it by [`COARSE`].
-const FINE_UNIT_STEP: f32 = 0.02;
-const FINE_HUE_STEP: f32 = 3.0;
-const COARSE: f32 = 5.0;
+/// Step of one key press: exactly one cell of the square or one row of the hue strip, so every
+/// press visibly moves the cursor. Holding Shift divides it by [`FINE`] for precise picks.
+const SATURATION_STEP: f32 = 1.0 / (SQUARE_COLS - 1) as f32;
+const VALUE_STEP: f32 = 1.0 / (SQUARE_ROWS - 1) as f32;
+const HUE_STEP: f32 = 360.0 / (HUE_ROWS - 1) as f32;
+const FINE: f32 = 5.0;
 
 /// Which part of the color picker the arrow keys and typing act on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,17 +63,17 @@ impl ColorPicker {
     }
 
     /// Moves the square cursor (`dx` right, `dy` down) or the hue (`dy` down), by one step or a
-    /// coarse one.
-    pub fn nudge(&mut self, dx: i32, dy: i32, coarse: bool) {
-        let scale = if coarse { COARSE } else { 1.0 };
+    /// fine one.
+    pub fn nudge(&mut self, dx: i32, dy: i32, fine: bool) {
+        let scale = if fine { 1.0 / FINE } else { 1.0 };
         match self.focus {
             PickerFocus::Square => {
                 self.saturation =
-                    (self.saturation + dx as f32 * FINE_UNIT_STEP * scale).clamp(0.0, 1.0);
-                self.value = (self.value - dy as f32 * FINE_UNIT_STEP * scale).clamp(0.0, 1.0);
+                    (self.saturation + dx as f32 * SATURATION_STEP * scale).clamp(0.0, 1.0);
+                self.value = (self.value - dy as f32 * VALUE_STEP * scale).clamp(0.0, 1.0);
             }
             PickerFocus::Hue => {
-                self.hue = (self.hue + dy as f32 * FINE_HUE_STEP * scale).clamp(0.0, 360.0);
+                self.hue = (self.hue + dy as f32 * HUE_STEP * scale).clamp(0.0, 360.0);
             }
         }
         self.color = BarColor::from_hsv(self.hue, self.saturation, self.value);
@@ -104,13 +106,37 @@ mod tests {
     }
 
     #[test]
+    fn test_every_press_moves_the_cursor_one_cell() {
+        let mut picker = ColorPicker::new(BarColor::rgb(255, 0, 0));
+        let (col, row) = picker.square_cursor();
+        picker.nudge(-1, 1, false);
+        assert_eq!(picker.square_cursor(), (col - 1, row + 1));
+        picker.nudge(-1, 1, false);
+        assert_eq!(picker.square_cursor(), (col - 2, row + 2));
+
+        picker.next_focus();
+        let hue_row = picker.hue_row();
+        picker.nudge(0, 1, false);
+        assert_eq!(picker.hue_row(), hue_row + 1);
+    }
+
+    #[test]
+    fn test_fine_steps_are_smaller_than_a_cell() {
+        let mut picker = ColorPicker::new(BarColor::rgb(255, 0, 0));
+        let before = picker.color();
+        picker.nudge(-1, 0, true);
+        assert_ne!(picker.color(), before);
+        assert_eq!(picker.square_cursor().0, SQUARE_COLS - 1);
+    }
+
+    #[test]
     fn test_square_moves_saturation_and_value() {
         let mut picker = ColorPicker::new(BarColor::rgb(255, 0, 0));
         picker.nudge(-1, 1, false);
         assert!(picker.saturation < 1.0 && picker.value < 1.0);
         assert_ne!(picker.color(), BarColor::rgb(255, 0, 0));
 
-        picker.nudge(100, -100, true);
+        picker.nudge(100, -100, false);
         assert_eq!((picker.saturation, picker.value), (1.0, 1.0));
         assert_eq!(picker.color(), BarColor::rgb(255, 0, 0));
     }
@@ -131,8 +157,13 @@ mod tests {
         assert_eq!(picker.focus, PickerFocus::Hue);
         picker.nudge(5, 0, false);
         assert_eq!(picker.hue, 0.0);
+        picker.nudge(0, 1, false);
+        assert_eq!(picker.hue, 40.0);
         picker.nudge(0, 1, true);
-        assert_eq!(picker.hue, 15.0);
+        assert_eq!(picker.hue, 48.0);
+        picker.nudge(0, -1, false);
+        picker.nudge(0, -1, true);
+        assert_eq!(picker.hue, 0.0);
         assert_eq!((picker.saturation, picker.value), (1.0, 1.0));
         picker.nudge(0, -100, false);
         assert_eq!(picker.hue, 0.0);

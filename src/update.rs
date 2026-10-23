@@ -39,6 +39,12 @@ pub struct BatchOutcome {
 pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
     let mut outcome = BatchOutcome::default();
     let has_tick = batch.has_tick();
+    // A key press is drawn right away instead of waiting for the next tick, so the UI answers
+    // input at once. Still one draw per batch, and never more than the batch had work for.
+    let has_key = batch
+        .events
+        .iter()
+        .any(|event| matches!(event, BatchEvent::Key(_)));
     let bar_count_before = app.bar_count;
     let gain_before = app.gain;
     let smoothing_before = app.smoothing;
@@ -87,24 +93,24 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
     }
     if has_tick {
         outcome.actions.push(AppAction::PollDevices);
-        outcome.draw = true;
     }
+    outcome.draw = has_tick || has_key;
 
     outcome
 }
 
 /// Handles a key while the color picker is open.
 fn update_color_picker(app: &mut App, key_event: KeyEvent) {
-    let coarse = key_event.modifiers.contains(KeyModifiers::SHIFT);
+    let fine = key_event.modifiers.contains(KeyModifiers::SHIFT);
     match key_event.code {
         KeyCode::Esc => app.close_color_picker(false),
         KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_picker(false),
         KeyCode::Enter => app.close_color_picker(true),
         KeyCode::Tab => app.edit_color_picker(ColorPicker::next_focus),
-        KeyCode::Up | KeyCode::Char('k') => app.edit_color_picker(|p| p.nudge(0, -1, coarse)),
-        KeyCode::Down | KeyCode::Char('j') => app.edit_color_picker(|p| p.nudge(0, 1, coarse)),
-        KeyCode::Left => app.edit_color_picker(|p| p.nudge(-1, 0, coarse)),
-        KeyCode::Right => app.edit_color_picker(|p| p.nudge(1, 0, coarse)),
+        KeyCode::Up | KeyCode::Char('k') => app.edit_color_picker(|p| p.nudge(0, -1, fine)),
+        KeyCode::Down | KeyCode::Char('j') => app.edit_color_picker(|p| p.nudge(0, 1, fine)),
+        KeyCode::Left => app.edit_color_picker(|p| p.nudge(-1, 0, fine)),
+        KeyCode::Right => app.edit_color_picker(|p| p.nudge(1, 0, fine)),
         _ => {}
     }
 }
@@ -228,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_without_tick_does_not_draw() {
+    fn test_batch_with_a_key_draws_without_waiting_for_a_tick() {
         let mut app = App::new();
         app.set_terminal_width(200);
 
@@ -242,9 +248,19 @@ mod tests {
             outcome,
             BatchOutcome {
                 actions: vec![AppAction::SetBarCount(40)],
-                draw: false,
+                draw: true,
             }
         );
+    }
+
+    #[test]
+    fn test_audio_only_batch_without_tick_does_not_draw() {
+        let mut app = App::new();
+        app.set_terminal_width(200);
+
+        let outcome = apply_batch(&mut app, batch_of(vec![Event::AudioBars(vec![0.5; 32])]));
+
+        assert_eq!(outcome, BatchOutcome::default());
     }
 
     fn press(app: &mut App, code: KeyCode) {
@@ -286,9 +302,12 @@ mod tests {
         press(&mut app, KeyCode::Left);
         let after_left = app.palette.bands[0];
         assert_ne!(after_left, BarColor::CYAN);
-        // Shift moves in coarse steps.
-        update(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-        assert!(app.palette.bands[0].r > after_left.r);
+        // Shift moves in fine steps, smaller than the plain press.
+        let after_plain = app.palette.bands[0];
+        update(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        let fine = app.palette.bands[0];
+        assert_ne!(fine, after_plain);
+        assert!(fine.r.abs_diff(after_plain.r) < after_plain.r.abs_diff(BarColor::CYAN.r));
         assert!(app.show_color_popup);
         assert!(!app.smoothing);
 

@@ -157,7 +157,7 @@ fn main() -> Result<()> {
             }
         }
 
-        // Render the user interface once per batch, on the tick cadence
+        // Render the user interface once per batch: on the tick cadence, or right after a key press
         if outcome.draw {
             tui.draw_if_changed(&mut app)?;
         }
