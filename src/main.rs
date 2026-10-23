@@ -96,7 +96,7 @@ fn main() -> Result<()> {
     tui.enter()?;
 
     // Main application loop
-    tui.draw(&mut app)?;
+    tui.draw_if_changed(&mut app)?;
     while !app.should_quit {
         // Handle everything queued since the last iteration before rendering, so a slow draw
         // can never leave a growing backlog of input and audio events behind it.
@@ -154,7 +154,7 @@ fn main() -> Result<()> {
 
         // Render the user interface once per batch, on the tick cadence
         if outcome.draw {
-            tui.draw(&mut app)?;
+            tui.draw_if_changed(&mut app)?;
         }
     }
 

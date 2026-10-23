@@ -1,14 +1,53 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    buffer::Buffer,
+    layout::{Alignment, Constraint, Rect, Size},
     style::{Color, Style},
-    text::{Line, Span},
+    text::Line,
     widgets::{
         Block, BorderType, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Widget,
     },
 };
 
 use crate::app::App;
+
+/// Everything [`render`] reads from the app, plus the terminal size.
+///
+/// The main loop compares it with the state of the last drawn frame and skips frames that would
+/// come out identical, e.g. during silence once the bars have settled at zero.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameState {
+    size: Size,
+    /// Displayed bars; left empty while the popup hides the visualizer.
+    bars: Vec<f32>,
+    show_popup: bool,
+    devices: Vec<String>,
+    selected_device_idx: usize,
+    active_device_idx: usize,
+    device_scroll_offset: usize,
+    audio_error: Option<String>,
+}
+
+impl FrameState {
+    /// Captures what the next frame would show for `app` on a terminal of `size`.
+    pub fn capture(app: &App, size: Size) -> Self {
+        Self {
+            size,
+            bars: if app.show_popup {
+                Vec::new()
+            } else {
+                app.displayed_bars()
+            },
+            show_popup: app.show_popup,
+            devices: app.devices.clone(),
+            selected_device_idx: app.selected_device_idx,
+            active_device_idx: app.active_device_idx,
+            device_scroll_offset: app.device_scroll_offset,
+            audio_error: app.audio_error.clone(),
+        }
+    }
+}
 
 pub fn render(app: &mut App, frame: &mut Frame) {
     match app.show_popup {
@@ -146,130 +185,194 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
     }
 }
 
-/// Renders normal bars (upward) combined with the mirror effect (downward / upside down).
-fn render_mirrored_soundwave(
-    amplitudes: &[f32],
-    upper_rows: usize,
-    mirror_rows: usize,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-
-    if upper_rows == 0 && mirror_rows == 0 {
-        return lines;
+/// Picks the glyph for one bar cell, given the row's threshold and the glyph ramp to use.
+fn bar_glyph(amplitude: f32, threshold: f32, rows: usize, glyphs: &[char]) -> char {
+    let row_span = 1.0 / rows as f32;
+    if amplitude >= threshold + row_span {
+        '█'
+    } else if amplitude >= threshold {
+        let fractional = (amplitude - threshold) * rows as f32;
+        let glyph_index = (fractional * (glyphs.len() - 1) as f32).round() as usize;
+        glyphs[glyph_index.clamp(0, glyphs.len() - 1)]
+    } else {
+        ' '
     }
+}
 
-    // 1. Upper Visualizer (grows upward from the center line to the top of the screen)
-    for row in (0..upper_rows).rev() {
-        let mut spans = Vec::new();
-        let threshold = row as f32 / upper_rows as f32;
+/// Picks one of three colors by which third of the spectrum the bar belongs to.
+fn band_color(bar: usize, bar_count: usize, [bass, mids, treble]: [Color; 3]) -> Color {
+    if bar < bar_count / 3 {
+        bass
+    } else if bar < (bar_count * 2) / 3 {
+        mids
+    } else {
+        treble
+    }
+}
 
-        for (i, &amp) in amplitudes.iter().enumerate() {
-            let normalized = amp.clamp(0.0, 1.0);
+/// Mirrored spectrum: bars grow upward from a center divider and are reflected below it.
+///
+/// Writes cells straight into the buffer. Building a `Paragraph` of styled spans meant one
+/// `String` allocation per cell plus unicode-width measurement for centering, every frame,
+/// which dominated the app's CPU use.
+struct Soundwave<'a> {
+    bars: &'a [f32],
+}
 
-            let character = if normalized >= threshold + (1.0 / upper_rows as f32) {
-                '█'
-            } else if normalized >= threshold {
-                let fractional = (normalized - threshold) * upper_rows as f32;
-                let char_index = (fractional * (WAVE_CHARS.len() - 1) as f32).round() as usize;
-                WAVE_CHARS[char_index.clamp(0, WAVE_CHARS.len() - 1)]
-            } else {
-                ' '
-            };
+impl Widget for Soundwave<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if area.height < 3 || self.bars.is_empty() {
+            return;
+        }
 
+        // Reserves 1 line for the center horizon/divider
+        let usable_lines = (area.height - 1) as usize;
+
+        // Complete symmetrical division: no artificial clamp limits.
+        // The divider line is fixed at the exact center of the screen and bars
+        // utilize 100% of the available vertical height (reaching the top and bottom).
+        let upper_rows = usable_lines / 2;
+        let mirror_rows = usable_lines / 2;
+        let content_lines = (upper_rows + 1 + mirror_rows) as u16;
+        // Vertically centers while filling the entire screen; a spare line goes above.
+        let top = area.y + (area.height - content_lines).div_ceil(2);
+        let divider_y = top + upper_rows as u16;
+
+        // Each bar is a glyph followed by a spacer. The row is centered horizontally; when the
+        // terminal is narrower than the row, the treble side is clipped.
+        let bar_count = self.bars.len();
+        let row_width = bar_count * 2;
+        let visible_width = row_width.min(area.width as usize);
+        let left = area.x + (area.width - visible_width as u16) / 2;
+        let mut set_cell = |column: usize, y: u16, glyph: char, color: Color| {
+            if column < visible_width {
+                buf[(left + column as u16, y)].set_char(glyph).set_fg(color);
+            }
+        };
+
+        for (i, &amplitude) in self.bars.iter().enumerate() {
             // Vibrant gradient: bass cyan -> mids green -> treble magenta
-            let color = if i < amplitudes.len() / 3 {
-                Color::Cyan
-            } else if i < (amplitudes.len() * 2) / 3 {
-                Color::Green
-            } else {
-                Color::Magenta
-            };
-
-            spans.push(Span::styled(
-                format!("{} ", character),
-                Style::default().fg(color),
-            ));
-        }
-
-        lines.push(Line::from(spans));
-    }
-
-    // 2. Subtle center divider line (mirror horizon at screen center)
-    let divider_spans: Vec<Span<'static>> = vec![Span::styled(
-        "──".repeat(amplitudes.len()),
-        Style::default().fg(Color::DarkGray),
-    )];
-    lines.push(Line::from(divider_spans));
-
-    // 3. Mirror Effect (upside down, grows down towards screen bottom)
-    for row in 0..mirror_rows {
-        let mut spans = Vec::new();
-        let threshold = row as f32 / mirror_rows as f32;
-
-        for (i, &amp) in amplitudes.iter().enumerate() {
-            // Slight reflection attenuation for a more realistic mirror/water effect
-            let mirror_amp = (amp * 0.85).clamp(0.0, 1.0);
-
-            let character = if mirror_amp >= threshold + (1.0 / mirror_rows as f32) {
-                '█'
-            } else if mirror_amp >= threshold {
-                let fractional = (mirror_amp - threshold) * mirror_rows as f32;
-                let char_index =
-                    (fractional * (INVERTED_WAVE_CHARS.len() - 1) as f32).round() as usize;
-                INVERTED_WAVE_CHARS[char_index.clamp(0, INVERTED_WAVE_CHARS.len() - 1)]
-            } else {
-                ' '
-            };
-
+            let color = band_color(i, bar_count, [Color::Cyan, Color::Green, Color::Magenta]);
             // Mirror reflection colors: softer/darker tones for depth effect
-            let mirror_color = if i < amplitudes.len() / 3 {
-                Color::Rgb(0, 120, 160)
-            } else if i < (amplitudes.len() * 2) / 3 {
-                Color::Rgb(30, 130, 70)
-            } else {
-                Color::Rgb(130, 40, 130)
-            };
+            let mirror_color = band_color(
+                i,
+                bar_count,
+                [
+                    Color::Rgb(0, 120, 160),
+                    Color::Rgb(30, 130, 70),
+                    Color::Rgb(130, 40, 130),
+                ],
+            );
+            let normalized = amplitude.clamp(0.0, 1.0);
+            // Slight reflection attenuation for a more realistic mirror/water effect
+            let mirror_amplitude = (amplitude * 0.85).clamp(0.0, 1.0);
 
-            spans.push(Span::styled(
-                format!("{} ", character),
-                Style::default().fg(mirror_color),
-            ));
+            // 1. Upper Visualizer (grows upward from the center line to the top of the screen)
+            for row in 0..upper_rows {
+                let threshold = row as f32 / upper_rows as f32;
+                let glyph = bar_glyph(normalized, threshold, upper_rows, WAVE_CHARS);
+                let y = divider_y - 1 - row as u16;
+                set_cell(i * 2, y, glyph, color);
+                set_cell(i * 2 + 1, y, ' ', color);
+            }
+
+            // 2. Subtle center divider line (mirror horizon at screen center)
+            set_cell(i * 2, divider_y, '─', Color::DarkGray);
+            set_cell(i * 2 + 1, divider_y, '─', Color::DarkGray);
+
+            // 3. Mirror Effect (upside down, grows down towards screen bottom)
+            for row in 0..mirror_rows {
+                let threshold = row as f32 / mirror_rows as f32;
+                let glyph = bar_glyph(
+                    mirror_amplitude,
+                    threshold,
+                    mirror_rows,
+                    INVERTED_WAVE_CHARS,
+                );
+                let y = divider_y + 1 + row as u16;
+                set_cell(i * 2, y, glyph, mirror_color);
+                set_cell(i * 2 + 1, y, ' ', mirror_color);
+            }
         }
-
-        lines.push(Line::from(spans));
     }
-
-    lines
 }
 
 pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32]) {
-    let available_height = area.height as usize;
-    if available_height < 3 {
-        return;
+    frame.render_widget(Soundwave { bars }, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    const SIZE: Size = Size::new(80, 24);
+
+    fn render_bars(bars: &[f32], width: u16, height: u16) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| draw_soundwave(frame, frame.area(), bars))
+            .unwrap();
+        terminal.backend().buffer().clone()
     }
 
-    // Reserves 1 line for the center horizon/divider
-    let usable_lines = available_height.saturating_sub(1);
+    #[test]
+    fn test_soundwave_layout() {
+        let mut bars = vec![0.0; 32];
+        bars[0] = 1.0;
+        let buffer = render_bars(&bars, 80, 7);
 
-    // Complete symmetrical division: no artificial clamp limits.
-    // The divider line is fixed at the exact center of the screen and bars
-    // utilize 100% of the available vertical height (reaching the top and bottom).
-    let upper_rows = usable_lines / 2;
-    let mirror_rows = usable_lines / 2;
-    let content_lines = upper_rows + 1 + mirror_rows;
+        // 7 rows: 3 upper, divider, 3 mirror; 64 columns centered in 80.
+        assert_eq!(buffer[(8, 0)].symbol(), "█");
+        assert_eq!(buffer[(8, 0)].fg, Color::Cyan);
+        assert_eq!(buffer[(9, 0)].symbol(), " ");
+        assert_eq!(buffer[(10, 0)].symbol(), " ");
+        assert_eq!(buffer[(7, 3)].symbol(), " ");
+        assert_eq!(buffer[(8, 3)].symbol(), "─");
+        assert_eq!(buffer[(71, 3)].symbol(), "─");
+        assert_eq!(buffer[(72, 3)].symbol(), " ");
+        // The mirror is attenuated to 0.85, so its last row is partially filled.
+        assert_eq!(buffer[(8, 4)].symbol(), "█");
+        assert_eq!(buffer[(8, 4)].fg, Color::Rgb(0, 120, 160));
+        assert_eq!(buffer[(8, 6)].symbol(), "▀");
+    }
 
-    let wave_lines = render_mirrored_soundwave(bars, upper_rows, mirror_rows);
-    let soundwave_widget = Paragraph::new(wave_lines).alignment(Alignment::Center);
+    #[test]
+    fn test_soundwave_clips_treble_on_narrow_terminal() {
+        let buffer = render_bars(&[1.0; 32], 40, 7);
 
-    // Vertically centers while filling the entire screen
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Fill(1),
-            Constraint::Length(content_lines as u16),
-            Constraint::Fill(1),
-        ])
-        .split(area);
+        assert_eq!(buffer[(0, 0)].fg, Color::Cyan);
+        assert_eq!(buffer[(39, 0)].fg, Color::Green);
+    }
 
-    frame.render_widget(soundwave_widget, chunks[1]);
+    #[test]
+    fn test_frame_state_is_stable_for_unchanged_app() {
+        let app = App::with_devices(vec!["A".into()], 0);
+
+        assert_eq!(
+            FrameState::capture(&app, SIZE),
+            FrameState::capture(&app, SIZE)
+        );
+    }
+
+    #[test]
+    fn test_frame_state_changes_with_bars_and_size() {
+        let mut app = App::new();
+        let before = FrameState::capture(&app, SIZE);
+
+        assert_ne!(before, FrameState::capture(&app, Size::new(100, 24)));
+        app.update_audio_bars(vec![0.5; 32]);
+        assert_ne!(before, FrameState::capture(&app, SIZE));
+    }
+
+    #[test]
+    fn test_frame_state_ignores_bars_behind_popup() {
+        let mut app = App::new();
+        app.show_popup = true;
+        let before = FrameState::capture(&app, SIZE);
+
+        app.update_audio_bars(vec![0.5; 32]);
+
+        assert_eq!(before, FrameState::capture(&app, SIZE));
+    }
 }

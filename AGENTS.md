@@ -38,6 +38,8 @@ Ratatui terminal audio visualizer (Rust, edition 2024). Captures system output a
 ## UI & Rendering (`src/ui.rs`)
 
 - The visualizer occupies 100% of the available vertical height, centered dynamically on the screen without enclosing block borders.
+- The visualizer is a `Soundwave` widget that writes cells straight into the `Buffer`. Don't go back to building a `Paragraph` of per-cell `Span`s: the per-cell `String` allocations and centering cost more than half the app's CPU. On a terminal narrower than the 64-column row, the treble side is clipped.
+- `Tui::draw_if_changed()` skips the draw when `ui::FrameState` (everything `render` reads, plus terminal size) matches the last drawn frame, so silence costs almost nothing. Anything new that `render` reads must be added to `FrameState`, or changes to it won't show until something else redraws.
 - Symmetrical layout:
   - Upper half: normal bars growing upward using base-anchored Unicode blocks (` ▂▃▄▅▆▇█`) with cyan-green-magenta gradient.
   - Center line: subtle horizontal divider (`──`).

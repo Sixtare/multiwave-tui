@@ -17,12 +17,18 @@ pub struct Tui {
     terminal: CrosstermTerminal,
     /// Terminal event handler.
     pub events: EventHandler,
+    /// State shown by the last drawn frame, used to skip identical redraws.
+    last_frame: Option<ui::FrameState>,
 }
 
 impl Tui {
     /// Constructs a new instance of [`Tui`].
     pub fn new(terminal: CrosstermTerminal, events: EventHandler) -> Self {
-        Self { terminal, events }
+        Self {
+            terminal,
+            events,
+            last_frame: None,
+        }
     }
 
     /// Initializes the terminal interface.
@@ -78,8 +84,19 @@ impl Tui {
         Ok(())
     }
 
-    pub fn draw(&mut self, app: &mut App) -> Result<()> {
+    /// Draws the app unless the frame would be identical to the last one drawn.
+    ///
+    /// Even an unchanged frame costs a full buffer rebuild and diff, which at 60 FPS is most of
+    /// the app's idle CPU use.
+    pub fn draw_if_changed(&mut self, app: &mut App) -> Result<()> {
+        let size = self.terminal.size()?;
+        if self.last_frame.as_ref() == Some(&ui::FrameState::capture(app, size)) {
+            return Ok(());
+        }
+
         self.terminal.draw(|frame| ui::render(app, frame))?;
+        // Capture after drawing: rendering the popup may adjust the scroll offset.
+        self.last_frame = Some(ui::FrameState::capture(app, size));
         Ok(())
     }
 }
