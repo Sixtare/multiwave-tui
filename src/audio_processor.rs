@@ -33,7 +33,15 @@ const TILT_PIVOT_HZ: f32 = 1000.0;
 
 /// Height the automatic sensitivity holds the loudest bar at (1.0 is the top). The headroom above
 /// it is left for transients and for the manual sensitivity, so loud music doesn't fill the screen.
-pub const PEAK_TARGET_HEIGHT: f32 = 0.75;
+const PEAK_TARGET_HEIGHT: f32 = 0.75;
+
+/// Height the loudest bars settle at for a manual gain: the automatic sensitivity holds them at
+/// [`PEAK_TARGET_HEIGHT`] and the manual gain then shifts every height by its decibels (see
+/// `compute_bars`). Never below a tenth, so a very low gain still leaves a usable range.
+pub fn loudest_bar_height(manual_gain: f32) -> f32 {
+    let offset = 20.0 * manual_gain.max(f32::EPSILON).log10() / DB_WINDOW;
+    (PEAK_TARGET_HEIGHT + offset).clamp(0.1, 1.0)
+}
 
 /// Time constant, in seconds, of the smoothing applied to the treble bars' power. The short FFT
 /// gives independent, noisy frames, so without it the mids and highs jitter far more than the
@@ -859,6 +867,30 @@ mod tests {
         // Doubling the amplitude is +6.02 dB on every bar that stays inside the window.
         for (base, boosted) in base.iter().zip(&boosted) {
             assert!((boosted - base - 6.02).abs() < 0.3, "{base} -> {boosted}");
+        }
+    }
+
+    #[test]
+    fn test_loudest_bar_height_follows_the_manual_gain() {
+        assert_eq!(loudest_bar_height(1.0), PEAK_TARGET_HEIGHT);
+        assert!(loudest_bar_height(0.5) < PEAK_TARGET_HEIGHT);
+        assert!(loudest_bar_height(2.0) > PEAK_TARGET_HEIGHT);
+        assert_eq!(loudest_bar_height(5.0), 1.0);
+        assert_eq!(loudest_bar_height(0.1), 0.35);
+        assert_eq!(loudest_bar_height(0.0), 0.1);
+
+        // It matches what the processor really does: the loudest bar of a steady tone settles
+        // at the target plus the gain's offset.
+        for gain in [0.5, 1.0, 1.5] {
+            let mut processor = AudioProcessor::new(1, SAMPLE_RATE, 32);
+            processor.set_manual_gain(gain);
+            let frames = processor.process_interleaved_samples(&sine(3000.0, 0.2, FFT_SIZE * 400));
+            let top = frames.last().unwrap().iter().cloned().fold(0.0, f32::max);
+            assert!(
+                (top - loudest_bar_height(gain)).abs() < 0.05,
+                "gain {gain}: {top} vs {}",
+                loudest_bar_height(gain)
+            );
         }
     }
 

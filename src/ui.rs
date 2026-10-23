@@ -12,7 +12,7 @@ use ratatui::{
 
 use crate::{
     app::{App, COLUMNS_PER_BAR},
-    audio_processor::PEAK_TARGET_HEIGHT,
+    audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
     palette::{BarColor, Palette},
 };
@@ -39,6 +39,8 @@ pub struct FrameState {
     /// Smoothing announcement, while it is on screen.
     smoothing_notice: Option<bool>,
     palette: Palette,
+    /// Manual sensitivity, which sets where the vertical gradient ends.
+    gain: f32,
     show_color_popup: bool,
     color_row: usize,
     color_picker: Option<ColorPicker>,
@@ -66,6 +68,7 @@ impl FrameState {
             gain_notice: app.gain_notice().filter(|_| !app.show_popup),
             smoothing_notice: app.smoothing_notice().filter(|_| !app.show_popup),
             palette: app.palette,
+            gain: app.gain,
             show_color_popup: app.show_color_popup,
             color_row: app.color_row,
             color_picker: app.color_picker.clone(),
@@ -77,7 +80,7 @@ impl FrameState {
 pub fn render(app: &mut App, frame: &mut Frame) {
     match app.show_popup {
         false => {
-            draw_soundwave(frame, frame.area(), &app.audio_bars, &app.palette);
+            draw_soundwave(frame, frame.area(), &app.audio_bars, &app.palette, app.gain);
             if app.show_color_popup {
                 render_color_popup(frame, app);
             }
@@ -490,6 +493,8 @@ fn bar_glyph(amplitude: f32, threshold: f32, rows: usize, glyphs: &[char]) -> ch
 struct Soundwave<'a> {
     bars: &'a [f32],
     palette: &'a Palette,
+    /// Height the loudest bars settle at, where the vertical gradient reaches its final color.
+    peak_height: f32,
 }
 
 impl Widget for Soundwave<'_> {
@@ -525,8 +530,9 @@ impl Widget for Soundwave<'_> {
 
         // In vertical mode the color depends on the row, not on the bar, so it is worked out once
         // per row instead of once per cell.
-        // The loudest bars only reach `PEAK_TARGET_HEIGHT` (the mirror is attenuated on top of
-        // that), so the gradient ends there and the final color is reached at ordinary levels.
+        // The loudest bars only reach `peak_height`, which the manual sensitivity raises or
+        // lowers (the mirror is attenuated on top of that), so the gradient ends there and the
+        // final color is reached at ordinary levels.
         // The row of the final color is the topmost cell such a bar draws.
         let height_t = |row: usize, rows: usize, full_height: f32| {
             let last_row = (rows as f32 * full_height - 1.0).max(1.0);
@@ -538,7 +544,7 @@ impl Widget for Soundwave<'_> {
                     (0..upper_rows)
                         .map(|row| {
                             self.palette
-                                .height_color(height_t(row, upper_rows, PEAK_TARGET_HEIGHT))
+                                .height_color(height_t(row, upper_rows, self.peak_height))
                                 .color()
                         })
                         .collect(),
@@ -547,7 +553,7 @@ impl Widget for Soundwave<'_> {
                             self.palette.mirror_height_color(height_t(
                                 row,
                                 mirror_rows,
-                                PEAK_TARGET_HEIGHT * MIRROR_ATTENUATION,
+                                self.peak_height * MIRROR_ATTENUATION,
                             ))
                         })
                         .collect(),
@@ -596,8 +602,17 @@ impl Widget for Soundwave<'_> {
     }
 }
 
-pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32], palette: &Palette) {
-    frame.render_widget(Soundwave { bars, palette }, area);
+/// Draws the spectrum. `gain` is the manual sensitivity, which decides how tall a bar has to be
+/// to show the final color of the vertical gradient.
+pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32], palette: &Palette, gain: f32) {
+    frame.render_widget(
+        Soundwave {
+            bars,
+            palette,
+            peak_height: loudest_bar_height(gain),
+        },
+        area,
+    );
 }
 
 #[cfg(test)]
@@ -613,9 +628,19 @@ mod tests {
     }
 
     fn render_bars_with(bars: &[f32], width: u16, height: u16, palette: &Palette) -> Buffer {
+        render_bars_with_gain(bars, width, height, palette, 1.0)
+    }
+
+    fn render_bars_with_gain(
+        bars: &[f32],
+        width: u16,
+        height: u16,
+        palette: &Palette,
+        gain: f32,
+    ) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|frame| draw_soundwave(frame, frame.area(), bars, palette))
+            .draw(|frame| draw_soundwave(frame, frame.area(), bars, palette, gain))
             .unwrap();
         terminal.backend().buffer().clone()
     }
@@ -1041,7 +1066,7 @@ mod tests {
             ],
             ..Palette::default()
         };
-        let peak = crate::audio_processor::PEAK_TARGET_HEIGHT;
+        let peak = loudest_bar_height(1.0);
         let buffer = render_bars_with(&[peak; 32], 64, 41, &palette);
 
         // 20 rows above the divider; the bar's topmost visible cell is the final color.
@@ -1050,6 +1075,38 @@ mod tests {
             .find(|cell| cell.symbol() != " ")
             .unwrap();
         assert_eq!(top_cell.fg, Color::Rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn test_lower_sensitivity_needs_shorter_bars_for_the_final_vertical_color() {
+        let palette = Palette {
+            mode: ColorMode::Vertical,
+            bands: [
+                BarColor::rgb(255, 0, 0),
+                BarColor::rgb(0, 255, 0),
+                BarColor::rgb(0, 0, 255),
+            ],
+            ..Palette::default()
+        };
+        let final_color = Color::Rgb(0, 0, 255);
+        let top_color = |bar_height: f32, gain: f32| {
+            let buffer = render_bars_with_gain(&[bar_height; 32], 64, 41, &palette, gain);
+            (0..20)
+                .map(|y| &buffer[(0, y)])
+                .find(|cell| cell.symbol() != " ")
+                .unwrap()
+                .fg
+        };
+
+        // A bar a little under the usual peak height: at full sensitivity it has not quite
+        // reached the final color, but with the gain turned down the peak is lower, so it has.
+        let short_bar = loudest_bar_height(0.5);
+        assert_ne!(top_color(short_bar, 1.0), final_color);
+        assert_eq!(top_color(short_bar, 0.5), final_color);
+        // Turning the gain up asks for taller bars.
+        let usual = loudest_bar_height(1.0);
+        assert_eq!(top_color(usual, 1.0), final_color);
+        assert_ne!(top_color(usual, 2.0), final_color);
     }
 
     #[test]
@@ -1068,6 +1125,14 @@ mod tests {
         for word in ["Vertical gradient", "Base", "Middle", "Top"] {
             assert!(text.contains(word), "{word}");
         }
+    }
+
+    #[test]
+    fn test_frame_state_changes_with_the_sensitivity() {
+        let mut app = App::new();
+        let before = FrameState::capture(&app, SIZE);
+        app.increase_gain();
+        assert_ne!(before.gain, FrameState::capture(&app, SIZE).gain);
     }
 
     #[test]
