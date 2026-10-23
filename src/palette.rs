@@ -99,13 +99,15 @@ impl BarColor {
     }
 }
 
-/// How the bars take their colors from the bass, mids and treble colors.
+/// How the bars take their colors from the three picked colors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorMode {
     /// One flat color per third of the spectrum.
     Bands,
     /// A smooth blend: bass at the left end, mids in the middle and treble at the right end.
     Gradient,
+    /// A smooth blend up every bar: bass at the base, mids halfway and treble at the top.
+    Vertical,
     /// The bass color on every bar.
     Single,
 }
@@ -115,7 +117,8 @@ impl ColorMode {
     pub fn next(self) -> ColorMode {
         match self {
             ColorMode::Single => ColorMode::Gradient,
-            ColorMode::Gradient => ColorMode::Bands,
+            ColorMode::Gradient => ColorMode::Vertical,
+            ColorMode::Vertical => ColorMode::Bands,
             ColorMode::Bands => ColorMode::Single,
         }
     }
@@ -124,6 +127,7 @@ impl ColorMode {
         match self {
             ColorMode::Bands => "Bands",
             ColorMode::Gradient => "Gradient",
+            ColorMode::Vertical => "Vertical gradient",
             ColorMode::Single => "Single color",
         }
     }
@@ -214,11 +218,11 @@ impl Palette {
         }
     }
 
-    /// The color of bar `bar` out of `bar_count`.
+    /// The color of bar `bar` out of `bar_count`. In vertical mode that is the color of its base.
     pub fn bar_color(&self, bar: usize, bar_count: usize) -> BarColor {
         let [bass, mids, treble] = self.bands;
         match self.mode {
-            ColorMode::Single => bass,
+            ColorMode::Single | ColorMode::Vertical => bass,
             ColorMode::Bands => {
                 if bar < bar_count / 3 {
                     bass
@@ -235,24 +239,64 @@ impl Palette {
                 } else {
                     0.0
                 };
-                if t <= 0.5 {
-                    bass.lerp(mids, t * 2.0)
-                } else {
-                    mids.lerp(treble, (t - 0.5) * 2.0)
-                }
+                self.blend(t)
             }
+        }
+    }
+
+    /// The three picked colors blended: the first at `t` 0, the second at 0.5, the third at 1.
+    fn blend(&self, t: f32) -> BarColor {
+        let [first, second, third] = self.bands;
+        if t <= 0.5 {
+            first.lerp(second, t * 2.0)
+        } else {
+            second.lerp(third, (t - 0.5) * 2.0)
+        }
+    }
+
+    /// Whether the colors change along the height of the bars instead of across them.
+    pub fn is_vertical(&self) -> bool {
+        self.mode == ColorMode::Vertical
+    }
+
+    /// The color at height `t` of a bar in vertical mode: 0 at its base, 1 at the far end.
+    pub fn height_color(&self, t: f32) -> BarColor {
+        self.blend(t)
+    }
+
+    /// The reflection's color at height `t` of a bar in vertical mode.
+    pub fn mirror_height_color(&self, t: f32) -> Color {
+        self.reflection(self.height_color(t))
+    }
+
+    /// A reflection's tone for `color`: darker unless the mirror is not dimmed.
+    fn reflection(&self, color: BarColor) -> Color {
+        if self.mirror_dimmed {
+            color.mirror_color()
+        } else {
+            color.color()
+        }
+    }
+
+    /// The label of a picker row. In vertical mode the three colors are the bar's base, middle
+    /// and top.
+    pub fn row_label(&self, row: usize) -> &'static str {
+        match (row, self.mode) {
+            (0, _) => "Mode",
+            (1, ColorMode::Vertical) => "Base",
+            (2, ColorMode::Vertical) => "Middle",
+            (3, ColorMode::Vertical) => "Top",
+            (1, _) => "Bass",
+            (2, _) => "Mids",
+            (3, _) => "Treble",
+            _ => "Mirror",
         }
     }
 
     /// The color of bar `bar`'s reflection: a darker tone of its color unless the mirror is not
     /// dimmed.
     pub fn mirror_bar_color(&self, bar: usize, bar_count: usize) -> Color {
-        let color = self.bar_color(bar, bar_count);
-        if self.mirror_dimmed {
-            color.mirror_color()
-        } else {
-            color.color()
-        }
+        self.reflection(self.bar_color(bar, bar_count))
     }
 
     /// Short description for the on-screen notice.
@@ -367,11 +411,13 @@ mod tests {
     }
 
     #[test]
-    fn test_mode_cycles_single_gradient_bands() {
+    fn test_mode_cycles_single_gradient_vertical_bands() {
         let mut palette = Palette::default();
         assert_eq!(palette.mode, ColorMode::Single);
         palette.next_mode();
         assert_eq!(palette.mode, ColorMode::Gradient);
+        palette.next_mode();
+        assert_eq!(palette.mode, ColorMode::Vertical);
         palette.next_mode();
         assert_eq!(palette.mode, ColorMode::Bands);
         palette.next_mode();
@@ -441,6 +487,52 @@ mod tests {
             assert!(jump(pair[0].g, pair[1].g) < 20, "{pair:?}");
             assert!(jump(pair[0].b, pair[1].b) < 20, "{pair:?}");
         }
+    }
+
+    #[test]
+    fn test_vertical_blends_from_base_through_middle_to_top() {
+        let palette = Palette {
+            mode: ColorMode::Vertical,
+            bands: [
+                BarColor::rgb(0, 0, 0),
+                BarColor::rgb(200, 100, 0),
+                BarColor::rgb(200, 100, 200),
+            ],
+            ..Palette::default()
+        };
+
+        assert!(palette.is_vertical());
+        assert_eq!(palette.height_color(0.0), palette.bands[0]);
+        assert_eq!(palette.height_color(0.5), palette.bands[1]);
+        assert_eq!(palette.height_color(1.0), palette.bands[2]);
+        assert_eq!(palette.height_color(0.25), BarColor::rgb(100, 50, 0));
+        assert_eq!(
+            palette.mirror_height_color(1.0),
+            palette.bands[2].mirror_color()
+        );
+        // Every bar starts from the same base color; all three colors stay editable.
+        assert_eq!(palette.bar_color(20, 32), palette.bands[0]);
+        assert!(palette.row_selectable(2) && palette.row_selectable(3));
+        assert_eq!(palette.describe(), "Vertical gradient");
+    }
+
+    #[test]
+    fn test_row_labels_name_the_base_middle_and_top_in_vertical_mode() {
+        let mut palette = Palette::default();
+        let labels = |palette: &Palette| {
+            (0..Palette::ROWS)
+                .map(|row| palette.row_label(row))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels(&palette),
+            ["Mode", "Bass", "Mids", "Treble", "Mirror"]
+        );
+        palette.mode = ColorMode::Vertical;
+        assert_eq!(
+            labels(&palette),
+            ["Mode", "Base", "Middle", "Top", "Mirror"]
+        );
     }
 
     #[test]

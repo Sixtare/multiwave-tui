@@ -298,10 +298,9 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, popup_area);
     frame.render_widget(block, popup_area);
 
-    let mut lines: Vec<Line> = ["Mode", "Bass", "Mids", "Treble", "Mirror"]
-        .iter()
-        .enumerate()
-        .map(|(row, label)| {
+    let mut lines: Vec<Line> = (0..Palette::ROWS)
+        .map(|row| {
+            let label = palette.row_label(row);
             // In single-color mode the mids and treble just follow the bass.
             let grayed_out = !palette.row_selectable(row);
             let selected = row == app.color_row;
@@ -520,6 +519,23 @@ impl Widget for Soundwave<'_> {
             }
         };
 
+        // In vertical mode the color depends on the row, not on the bar, so it is worked out once
+        // per row instead of once per cell.
+        let height_t = |row: usize, rows: usize| row as f32 / rows.saturating_sub(1).max(1) as f32;
+        let (upper_row_colors, mirror_row_colors): (Vec<Color>, Vec<Color>) =
+            if self.palette.is_vertical() {
+                (
+                    (0..upper_rows)
+                        .map(|row| self.palette.height_color(height_t(row, upper_rows)).color())
+                        .collect(),
+                    (0..mirror_rows)
+                        .map(|row| self.palette.mirror_height_color(height_t(row, mirror_rows)))
+                        .collect(),
+                )
+            } else {
+                (Vec::new(), Vec::new())
+            };
+
         for (i, &amplitude) in self.bars.iter().enumerate() {
             let color = self.palette.bar_color(i, bar_count).color();
             // Mirror reflection colors: softer/darker tones for depth effect
@@ -533,6 +549,7 @@ impl Widget for Soundwave<'_> {
                 let threshold = row as f32 / upper_rows as f32;
                 let glyph = bar_glyph(normalized, threshold, upper_rows, WAVE_CHARS);
                 let y = divider_y - 1 - row as u16;
+                let color = upper_row_colors.get(row).copied().unwrap_or(color);
                 set_cell(i * 2, y, glyph, color);
                 set_cell(i * 2 + 1, y, ' ', color);
             }
@@ -551,6 +568,7 @@ impl Widget for Soundwave<'_> {
                     INVERTED_WAVE_CHARS,
                 );
                 let y = divider_y + 1 + row as u16;
+                let mirror_color = mirror_row_colors.get(row).copied().unwrap_or(mirror_color);
                 set_cell(i * 2, y, glyph, mirror_color);
                 set_cell(i * 2 + 1, y, ' ', mirror_color);
             }
@@ -953,6 +971,55 @@ mod tests {
         // The mirror is the same blend, darker.
         assert_eq!(buffer[(0, 4)].fg, Color::Rgb(0, 128, 128));
         assert_ne!(buffer[(20, 4)].fg, buffer[(22, 4)].fg);
+    }
+
+    #[test]
+    fn test_vertical_mode_colors_every_bar_from_its_base_to_its_top() {
+        let palette = Palette {
+            mode: ColorMode::Vertical,
+            bands: [
+                BarColor::rgb(255, 0, 0),
+                BarColor::rgb(0, 255, 0),
+                BarColor::rgb(0, 0, 255),
+            ],
+            ..Palette::default()
+        };
+        // 11 rows: 5 above the divider, the divider, 5 in the mirror.
+        let buffer = render_bars_with(&[1.0; 32], 64, 11, &palette);
+
+        let column = |bar: u16, rows: std::ops::Range<u16>| -> Vec<Color> {
+            rows.map(|y| buffer[(bar * 2, y)].fg).collect()
+        };
+        // Top to bottom above the divider (row 5): treble, then back down to the base color.
+        let upper = column(0, 0..5);
+        assert_eq!(upper[0], Color::Rgb(0, 0, 255));
+        assert_eq!(upper[2], Color::Rgb(0, 255, 0));
+        assert_eq!(upper[4], Color::Rgb(255, 0, 0));
+        // All bars share the same column of colors, unlike the horizontal modes.
+        assert_eq!(column(0, 0..5), column(31, 0..5));
+        // The mirror repeats the blend going down, darker.
+        let mirror = column(0, 6..11);
+        assert_eq!(mirror[0], Color::Rgb(128, 0, 0));
+        assert_eq!(mirror[2], Color::Rgb(0, 128, 0));
+        assert_eq!(mirror[4], Color::Rgb(0, 0, 128));
+    }
+
+    #[test]
+    fn test_color_popup_labels_follow_the_mode() {
+        let mut app = App::new();
+        app.palette.mode = ColorMode::Vertical;
+        app.open_color_popup();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = (0..20)
+            .flat_map(|y| (0..80).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+            .collect();
+        for word in ["Vertical gradient", "Base", "Middle", "Top"] {
+            assert!(text.contains(word), "{word}");
+        }
     }
 
     #[test]

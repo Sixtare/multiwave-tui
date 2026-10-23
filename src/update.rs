@@ -285,12 +285,12 @@ mod tests {
         assert!(!app.should_quit);
         assert_eq!(app.bar_count, 32);
 
-        // Enter on the mode row goes from single color through gradient to bands.
+        // Enter on the mode row goes from single color through the gradients to bands.
         assert_eq!(app.palette.mode, ColorMode::Single);
-        press(&mut app, KeyCode::Enter);
-        assert_eq!(app.palette.mode, ColorMode::Gradient);
-        press(&mut app, KeyCode::Enter);
-        assert_eq!(app.palette.mode, ColorMode::Bands);
+        for expected in [ColorMode::Gradient, ColorMode::Vertical, ColorMode::Bands] {
+            press(&mut app, KeyCode::Enter);
+            assert_eq!(app.palette.mode, expected);
+        }
         assert_eq!(app.color_picker, None);
     }
 
