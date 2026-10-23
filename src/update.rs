@@ -128,6 +128,8 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             _ if app.color_picker.is_some() => update_color_picker(app, key_event),
             KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_popup(),
             KeyCode::Enter => app.activate_color_row(),
+            KeyCode::Left => app.change_color_mode(false),
+            KeyCode::Right => app.change_color_mode(true),
             KeyCode::Up | KeyCode::Char('k') => app.select_prev_color_row(),
             KeyCode::Down | KeyCode::Char('j') => app.select_next_color_row(),
             _ => {}
@@ -185,7 +187,11 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{color_picker::PickerFocus, event::Event, palette::BarColor};
+    use crate::{
+        color_picker::PickerFocus,
+        event::Event,
+        palette::{BarColor, ColorMode},
+    };
 
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
@@ -276,15 +282,24 @@ mod tests {
 
         press(&mut app, KeyCode::Char('s'));
         press(&mut app, KeyCode::Char('q'));
-        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Char('l'));
         assert!(!app.smoothing);
         assert!(!app.should_quit);
         assert_eq!(app.bar_count, 32);
 
-        // Enter on the mode row switches to single color.
+        // Enter does nothing on the mode row; Right goes from single color through the
+        // gradients to bands and Left goes back.
+        assert_eq!(app.palette.mode, ColorMode::Single);
         press(&mut app, KeyCode::Enter);
-        assert!(app.palette.single_mode);
+        assert_eq!(app.palette.mode, ColorMode::Single);
+        for expected in [ColorMode::Gradient, ColorMode::Vertical, ColorMode::Bands] {
+            press(&mut app, KeyCode::Right);
+            assert_eq!(app.palette.mode, expected);
+        }
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.palette.mode, ColorMode::Vertical);
         assert_eq!(app.color_picker, None);
+        assert_eq!(app.bar_count, 32);
     }
 
     fn open_picker_on_bass(app: &mut App) {

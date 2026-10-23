@@ -12,6 +12,7 @@ use ratatui::{
 
 use crate::{
     app::{App, COLUMNS_PER_BAR},
+    audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
     palette::{BarColor, Palette},
 };
@@ -38,6 +39,8 @@ pub struct FrameState {
     /// Smoothing announcement, while it is on screen.
     smoothing_notice: Option<bool>,
     palette: Palette,
+    /// Manual sensitivity, which sets where the vertical gradient ends.
+    gain: f32,
     show_color_popup: bool,
     color_row: usize,
     color_picker: Option<ColorPicker>,
@@ -65,6 +68,7 @@ impl FrameState {
             gain_notice: app.gain_notice().filter(|_| !app.show_popup),
             smoothing_notice: app.smoothing_notice().filter(|_| !app.show_popup),
             palette: app.palette,
+            gain: app.gain,
             show_color_popup: app.show_color_popup,
             color_row: app.color_row,
             color_picker: app.color_picker.clone(),
@@ -76,7 +80,7 @@ impl FrameState {
 pub fn render(app: &mut App, frame: &mut Frame) {
     match app.show_popup {
         false => {
-            draw_soundwave(frame, frame.area(), &app.audio_bars, &app.palette);
+            draw_soundwave(frame, frame.area(), &app.audio_bars, &app.palette, app.gain);
             if app.show_color_popup {
                 render_color_popup(frame, app);
             }
@@ -158,6 +162,9 @@ fn render_audio_error(frame: &mut Frame, message: &str) {
         status_area,
     );
 }
+
+/// How much the reflection is attenuated, for a more realistic mirror/water effect.
+const MIRROR_ATTENUATION: f32 = 0.85;
 
 // Characters for the upper bars (base-anchored)
 const WAVE_CHARS: &[char] = &[' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -292,16 +299,15 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     let block = Block::bordered()
         .title(" Bar Colors ")
         .title_alignment(Alignment::Center)
-        .title_bottom(Line::from(" Enter select  Esc close ").centered())
+        .title_bottom(Line::from(" ←→ mode  Enter pick  Esc close ").centered())
         .border_type(BorderType::Rounded);
     let inner = block.inner(popup_area);
     frame.render_widget(Clear, popup_area);
     frame.render_widget(block, popup_area);
 
-    let mut lines: Vec<Line> = ["Mode", "Bass", "Mids", "Treble", "Mirror"]
-        .iter()
-        .enumerate()
-        .map(|(row, label)| {
+    let mut lines: Vec<Line> = (0..Palette::ROWS)
+        .map(|row| {
+            let label = palette.row_label(row);
             // In single-color mode the mids and treble just follow the bass.
             let grayed_out = !palette.row_selectable(row);
             let selected = row == app.color_row;
@@ -328,20 +334,20 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
                     let mark = if palette.mirror_dimmed { "x" } else { " " };
                     vec![Span::styled(format!("[{mark}] Darker"), text_style)]
                 }
-                None => vec![Span::styled(
-                    if palette.single_mode {
-                        "Single color"
-                    } else {
-                        "Gradient"
-                    },
-                    text_style,
-                )],
+                None => vec![Span::styled(palette.mode.label(), text_style)],
             };
             let mut spans = vec![Span::styled(
                 format!("{} {:<7}", if selected { ">" } else { " " }, label),
                 text_style,
             )];
-            spans.extend(value);
+            // The mode is changed with the arrows, which the row shows around its name.
+            if row == 0 {
+                spans.push(Span::styled("◀ ", text_style));
+                spans.extend(value);
+                spans.push(Span::styled(" ▶", text_style));
+            } else {
+                spans.extend(value);
+            }
             Line::from(spans)
         })
         .collect();
@@ -486,17 +492,6 @@ fn bar_glyph(amplitude: f32, threshold: f32, rows: usize, glyphs: &[char]) -> ch
     }
 }
 
-/// Picks one of three colors by which third of the spectrum the bar belongs to.
-fn band_color(bar: usize, bar_count: usize, [bass, mids, treble]: [Color; 3]) -> Color {
-    if bar < bar_count / 3 {
-        bass
-    } else if bar < (bar_count * 2) / 3 {
-        mids
-    } else {
-        treble
-    }
-}
-
 /// Mirrored spectrum: bars grow upward from a center divider and are reflected below it.
 ///
 /// Writes cells straight into the buffer. Building a `Paragraph` of styled spans meant one
@@ -505,6 +500,8 @@ fn band_color(bar: usize, bar_count: usize, [bass, mids, treble]: [Color; 3]) ->
 struct Soundwave<'a> {
     bars: &'a [f32],
     palette: &'a Palette,
+    /// Height the loudest bars settle at, where the vertical gradient reaches its final color.
+    peak_height: f32,
 }
 
 impl Widget for Soundwave<'_> {
@@ -538,21 +535,54 @@ impl Widget for Soundwave<'_> {
             }
         };
 
-        let band_colors = self.palette.colors();
-        let mirror_band_colors = self.palette.mirror_colors();
+        // In vertical mode the color depends on the row, not on the bar, so it is worked out once
+        // per row instead of once per cell.
+        // The loudest bars only reach `peak_height`, which the manual sensitivity raises or
+        // lowers (the mirror is attenuated on top of that), so the gradient ends there and the
+        // final color is reached at ordinary levels.
+        // The row of the final color is the topmost cell such a bar draws.
+        let height_t = |row: usize, rows: usize, full_height: f32| {
+            let last_row = (rows as f32 * full_height - 1.0).max(1.0);
+            (row as f32 / last_row).min(1.0)
+        };
+        let (upper_row_colors, mirror_row_colors): (Vec<Color>, Vec<Color>) =
+            if self.palette.is_vertical() {
+                (
+                    (0..upper_rows)
+                        .map(|row| {
+                            self.palette
+                                .height_color(height_t(row, upper_rows, self.peak_height))
+                                .color()
+                        })
+                        .collect(),
+                    (0..mirror_rows)
+                        .map(|row| {
+                            self.palette.mirror_height_color(height_t(
+                                row,
+                                mirror_rows,
+                                self.peak_height * MIRROR_ATTENUATION,
+                            ))
+                        })
+                        .collect(),
+                )
+            } else {
+                (Vec::new(), Vec::new())
+            };
+
         for (i, &amplitude) in self.bars.iter().enumerate() {
-            let color = band_color(i, bar_count, band_colors);
+            let color = self.palette.bar_color(i, bar_count).color();
             // Mirror reflection colors: softer/darker tones for depth effect
-            let mirror_color = band_color(i, bar_count, mirror_band_colors);
+            let mirror_color = self.palette.mirror_bar_color(i, bar_count);
             let normalized = amplitude.clamp(0.0, 1.0);
             // Slight reflection attenuation for a more realistic mirror/water effect
-            let mirror_amplitude = (amplitude * 0.85).clamp(0.0, 1.0);
+            let mirror_amplitude = (amplitude * MIRROR_ATTENUATION).clamp(0.0, 1.0);
 
             // 1. Upper Visualizer (grows upward from the center line to the top of the screen)
             for row in 0..upper_rows {
                 let threshold = row as f32 / upper_rows as f32;
                 let glyph = bar_glyph(normalized, threshold, upper_rows, WAVE_CHARS);
                 let y = divider_y - 1 - row as u16;
+                let color = upper_row_colors.get(row).copied().unwrap_or(color);
                 set_cell(i * 2, y, glyph, color);
                 set_cell(i * 2 + 1, y, ' ', color);
             }
@@ -571,6 +601,7 @@ impl Widget for Soundwave<'_> {
                     INVERTED_WAVE_CHARS,
                 );
                 let y = divider_y + 1 + row as u16;
+                let mirror_color = mirror_row_colors.get(row).copied().unwrap_or(mirror_color);
                 set_cell(i * 2, y, glyph, mirror_color);
                 set_cell(i * 2 + 1, y, ' ', mirror_color);
             }
@@ -578,21 +609,45 @@ impl Widget for Soundwave<'_> {
     }
 }
 
-pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32], palette: &Palette) {
-    frame.render_widget(Soundwave { bars, palette }, area);
+/// Draws the spectrum. `gain` is the manual sensitivity, which decides how tall a bar has to be
+/// to show the final color of the vertical gradient.
+pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32], palette: &Palette, gain: f32) {
+    frame.render_widget(
+        Soundwave {
+            bars,
+            palette,
+            peak_height: loudest_bar_height(gain),
+        },
+        area,
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette::ColorMode;
     use ratatui::{Terminal, backend::TestBackend};
 
     const SIZE: Size = Size::new(80, 24);
 
     fn render_bars(bars: &[f32], width: u16, height: u16) -> Buffer {
+        render_bars_with(bars, width, height, &Palette::default())
+    }
+
+    fn render_bars_with(bars: &[f32], width: u16, height: u16, palette: &Palette) -> Buffer {
+        render_bars_with_gain(bars, width, height, palette, 1.0)
+    }
+
+    fn render_bars_with_gain(
+        bars: &[f32],
+        width: u16,
+        height: u16,
+        palette: &Palette,
+        gain: f32,
+    ) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|frame| draw_soundwave(frame, frame.area(), bars, &Palette::default()))
+            .draw(|frame| draw_soundwave(frame, frame.area(), bars, palette, gain))
             .unwrap();
         terminal.backend().buffer().clone()
     }
@@ -620,7 +675,11 @@ mod tests {
 
     #[test]
     fn test_soundwave_clips_treble_on_narrow_terminal() {
-        let buffer = render_bars(&[1.0; 32], 40, 7);
+        let bands = Palette {
+            mode: ColorMode::Bands,
+            ..Palette::default()
+        };
+        let buffer = render_bars_with(&[1.0; 32], 40, 7, &bands);
 
         assert_eq!(buffer[(0, 0)].fg, Color::Rgb(0, 255, 255));
         assert_eq!(buffer[(39, 0)].fg, Color::Rgb(0, 205, 0));
@@ -762,7 +821,6 @@ mod tests {
     fn test_color_popup_previews_on_the_bars_and_is_drawn_over_them() {
         let mut app = App::new();
         app.open_color_popup();
-        app.activate_color_row();
         app.update_audio_bars(vec![1.0; 32]);
         app.tick();
 
@@ -857,8 +915,7 @@ mod tests {
         let mut app = App::new();
         app.open_color_popup();
         let (gradient_height, _, _) = render_popup_rows(&mut app);
-        app.activate_color_row();
-        assert!(app.palette.single_mode);
+        app.palette.mode = ColorMode::Single;
         let (height, top, buffer) = render_popup_rows(&mut app);
         assert_eq!(height, gradient_height);
 
@@ -936,7 +993,7 @@ mod tests {
     fn test_color_notice_is_drawn_after_confirming() {
         let mut app = App::new();
         app.open_color_popup();
-        app.activate_color_row();
+        app.change_color_mode(true);
         app.close_color_popup();
 
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
@@ -944,11 +1001,161 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         let top_row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
-        assert!(top_row.ends_with(" color: #00FFFF "), "{top_row:?}");
+        assert!(top_row.ends_with(" color: Gradient "), "{top_row:?}");
         assert_eq!(
             FrameState::capture(&app, SIZE).color_notice.as_deref(),
-            Some("#00FFFF")
+            Some("Gradient")
         );
+    }
+
+    #[test]
+    fn test_gradient_mode_blends_the_colors_across_the_bars() {
+        let mut app = App::new();
+        app.palette.mode = ColorMode::Gradient;
+        let buffer = render_bars_with(&[1.0; 32], 64, 7, &app.palette);
+
+        // Bars are two columns wide: first is the bass color, last the treble color, and no two
+        // neighbouring bars share a color.
+        assert_eq!(buffer[(0, 0)].fg, Color::Rgb(0, 255, 255));
+        assert_eq!(buffer[(62, 0)].fg, Color::Rgb(255, 0, 255));
+        let colors: Vec<Color> = (0..32).map(|bar| buffer[(bar * 2, 0)].fg).collect();
+        assert!(colors.windows(2).all(|pair| pair[0] != pair[1]));
+        // The mirror is the same blend, darker.
+        assert_eq!(buffer[(0, 4)].fg, Color::Rgb(0, 128, 128));
+        assert_ne!(buffer[(20, 4)].fg, buffer[(22, 4)].fg);
+    }
+
+    #[test]
+    fn test_vertical_mode_colors_every_bar_from_its_base_to_its_top() {
+        let palette = Palette {
+            mode: ColorMode::Vertical,
+            bands: [
+                BarColor::rgb(255, 0, 0),
+                BarColor::rgb(0, 255, 0),
+                BarColor::rgb(0, 0, 255),
+            ],
+            ..Palette::default()
+        };
+        // 11 rows: 5 above the divider, the divider, 5 in the mirror.
+        let buffer = render_bars_with(&[1.0; 32], 64, 11, &palette);
+
+        let column = |bar: u16, rows: std::ops::Range<u16>| -> Vec<Color> {
+            rows.map(|y| buffer[(bar * 2, y)].fg).collect()
+        };
+        // Top to bottom above the divider (row 5). The gradient ends at the height the loudest
+        // bars reach (0.75), so the top two rows already show the final color.
+        let upper = column(0, 0..5);
+        assert_eq!(upper[0], Color::Rgb(0, 0, 255));
+        assert_eq!(upper[1], Color::Rgb(0, 0, 255));
+        assert_eq!(upper[4], Color::Rgb(255, 0, 0));
+        // The rows in between are real blends.
+        assert_ne!(upper[2], upper[1]);
+        assert_ne!(upper[2], upper[3]);
+        assert_ne!(upper[3], upper[4]);
+        // All bars share the same column of colors, unlike the horizontal modes.
+        assert_eq!(column(0, 0..5), column(31, 0..5));
+        // The mirror repeats the blend going down, darker, and ends sooner since it is
+        // attenuated.
+        let mirror = column(0, 6..11);
+        assert_eq!(mirror[0], Color::Rgb(128, 0, 0));
+        assert_eq!(mirror[3], Color::Rgb(0, 0, 128));
+        assert_eq!(mirror[4], Color::Rgb(0, 0, 128));
+    }
+
+    #[test]
+    fn test_vertical_final_color_is_reached_by_a_bar_at_the_peak_target() {
+        let palette = Palette {
+            mode: ColorMode::Vertical,
+            bands: [
+                BarColor::rgb(255, 0, 0),
+                BarColor::rgb(0, 255, 0),
+                BarColor::rgb(0, 0, 255),
+            ],
+            ..Palette::default()
+        };
+        let peak = loudest_bar_height(1.0);
+        let buffer = render_bars_with(&[peak; 32], 64, 41, &palette);
+
+        // 20 rows above the divider; the bar's topmost visible cell is the final color.
+        let top_cell = (0..20)
+            .map(|y| &buffer[(0, y)])
+            .find(|cell| cell.symbol() != " ")
+            .unwrap();
+        assert_eq!(top_cell.fg, Color::Rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn test_lower_sensitivity_needs_shorter_bars_for_the_final_vertical_color() {
+        let palette = Palette {
+            mode: ColorMode::Vertical,
+            bands: [
+                BarColor::rgb(255, 0, 0),
+                BarColor::rgb(0, 255, 0),
+                BarColor::rgb(0, 0, 255),
+            ],
+            ..Palette::default()
+        };
+        let final_color = Color::Rgb(0, 0, 255);
+        let top_color = |bar_height: f32, gain: f32| {
+            let buffer = render_bars_with_gain(&[bar_height; 32], 64, 41, &palette, gain);
+            (0..20)
+                .map(|y| &buffer[(0, y)])
+                .find(|cell| cell.symbol() != " ")
+                .unwrap()
+                .fg
+        };
+
+        // A bar a little under the usual peak height: at full sensitivity it has not quite
+        // reached the final color, but with the gain turned down the peak is lower, so it has.
+        let short_bar = loudest_bar_height(0.5);
+        assert_ne!(top_color(short_bar, 1.0), final_color);
+        assert_eq!(top_color(short_bar, 0.5), final_color);
+        // Turning the gain up asks for taller bars.
+        let usual = loudest_bar_height(1.0);
+        assert_eq!(top_color(usual, 1.0), final_color);
+        assert_ne!(top_color(usual, 2.0), final_color);
+    }
+
+    #[test]
+    fn test_color_popup_labels_follow_the_mode() {
+        let mut app = App::new();
+        app.palette.mode = ColorMode::Vertical;
+        app.open_color_popup();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = (0..20)
+            .flat_map(|y| (0..80).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+            .collect();
+        for word in [
+            "Vertical gradient",
+            "Base",
+            "Middle",
+            "Top",
+            "←→ mode",
+            "◀",
+            "▶",
+        ] {
+            assert!(text.contains(word), "{word}");
+        }
+    }
+
+    #[test]
+    fn test_frame_state_changes_with_the_sensitivity() {
+        let mut app = App::new();
+        let before = FrameState::capture(&app, SIZE);
+        app.increase_gain();
+        assert_ne!(before.gain, FrameState::capture(&app, SIZE).gain);
+    }
+
+    #[test]
+    fn test_frame_state_changes_with_the_color_mode() {
+        let mut app = App::new();
+        let before = FrameState::capture(&app, SIZE);
+        app.palette.mode = ColorMode::Gradient;
+        assert_ne!(before, FrameState::capture(&app, SIZE));
     }
 
     #[test]
