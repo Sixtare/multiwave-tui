@@ -299,7 +299,7 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     let block = Block::bordered()
         .title(" Bar Colors ")
         .title_alignment(Alignment::Center)
-        .title_bottom(Line::from(" Enter select  Esc close ").centered())
+        .title_bottom(Line::from(" ←→ mode  Enter pick  Esc close ").centered())
         .border_type(BorderType::Rounded);
     let inner = block.inner(popup_area);
     frame.render_widget(Clear, popup_area);
@@ -340,7 +340,14 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
                 format!("{} {:<7}", if selected { ">" } else { " " }, label),
                 text_style,
             )];
-            spans.extend(value);
+            // The mode is changed with the arrows, which the row shows around its name.
+            if row == 0 {
+                spans.push(Span::styled("◀ ", text_style));
+                spans.extend(value);
+                spans.push(Span::styled(" ▶", text_style));
+            } else {
+                spans.extend(value);
+            }
             Line::from(spans)
         })
         .collect();
@@ -986,7 +993,7 @@ mod tests {
     fn test_color_notice_is_drawn_after_confirming() {
         let mut app = App::new();
         app.open_color_popup();
-        app.activate_color_row();
+        app.change_color_mode(true);
         app.close_color_popup();
 
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
@@ -1122,7 +1129,15 @@ mod tests {
             .flat_map(|y| (0..80).map(move |x| (x, y)))
             .map(|(x, y)| buffer[(x, y)].symbol().to_string())
             .collect();
-        for word in ["Vertical gradient", "Base", "Middle", "Top"] {
+        for word in [
+            "Vertical gradient",
+            "Base",
+            "Middle",
+            "Top",
+            "←→ mode",
+            "◀",
+            "▶",
+        ] {
             assert!(text.contains(word), "{word}");
         }
     }

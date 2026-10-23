@@ -331,11 +331,19 @@ impl App {
         self.color_row = self.palette.next_row(self.color_row, false);
     }
 
-    /// Acts on the highlighted row: flips the mode or the mirror checkbox, or opens the color
-    /// picker for a color row.
+    /// Switches the color mode to the next one, or the previous one, when the mode row is
+    /// highlighted.
+    pub fn change_color_mode(&mut self, forward: bool) {
+        if self.color_row == 0 {
+            self.palette.change_mode(forward);
+        }
+    }
+
+    /// Acts on the highlighted row: flips the mirror checkbox, or opens the color picker for a
+    /// color row. The mode row is changed with the arrows instead.
     pub fn activate_color_row(&mut self) {
         match self.color_row {
-            0 => self.palette.next_mode(),
+            0 => {}
             Palette::MIRROR_ROW => self.palette.toggle_mirror_dimmed(),
             _ => {
                 if let Some(color) = self.palette.row_color(self.color_row) {
@@ -466,13 +474,28 @@ mod tests {
         assert_eq!(app.color_row, 4);
         app.select_next_color_row();
 
+        // Enter does nothing on the mode row; the arrows change the mode.
         app.activate_color_row();
+        assert_eq!(app.palette.mode, ColorMode::Single);
+        app.change_color_mode(true);
         assert_eq!(app.palette.mode, ColorMode::Gradient);
+        app.change_color_mode(false);
+        assert_eq!(app.palette.mode, ColorMode::Single);
+        app.change_color_mode(true);
         assert_eq!(app.color_picker, None);
         app.select_prev_color_row();
         assert_eq!(app.color_row, 4);
         app.select_prev_color_row();
         assert_eq!(app.color_row, 3);
+    }
+
+    #[test]
+    fn test_changing_the_mode_only_works_on_the_mode_row() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.select_next_color_row();
+        app.change_color_mode(true);
+        assert_eq!(app.palette.mode, ColorMode::Single);
     }
 
     #[test]

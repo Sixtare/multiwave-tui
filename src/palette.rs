@@ -123,6 +123,16 @@ impl ColorMode {
         }
     }
 
+    /// The mode before this one in the picker's order.
+    pub fn previous(self) -> ColorMode {
+        match self {
+            ColorMode::Single => ColorMode::Bands,
+            ColorMode::Gradient => ColorMode::Single,
+            ColorMode::Vertical => ColorMode::Gradient,
+            ColorMode::Bands => ColorMode::Vertical,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             ColorMode::Bands => "Bands",
@@ -201,9 +211,13 @@ impl Palette {
         }
     }
 
-    /// Switches to the next color mode: bands, gradient, single color.
-    pub fn next_mode(&mut self) {
-        self.mode = self.mode.next();
+    /// Switches to the next color mode, or the previous one.
+    pub fn change_mode(&mut self, forward: bool) {
+        self.mode = if forward {
+            self.mode.next()
+        } else {
+            self.mode.previous()
+        };
     }
 
     /// Turns the darker mirror tone on or off.
@@ -414,14 +428,25 @@ mod tests {
     fn test_mode_cycles_single_gradient_vertical_bands() {
         let mut palette = Palette::default();
         assert_eq!(palette.mode, ColorMode::Single);
-        palette.next_mode();
-        assert_eq!(palette.mode, ColorMode::Gradient);
-        palette.next_mode();
-        assert_eq!(palette.mode, ColorMode::Vertical);
-        palette.next_mode();
-        assert_eq!(palette.mode, ColorMode::Bands);
-        palette.next_mode();
-        assert_eq!(palette.mode, ColorMode::Single);
+        for expected in [
+            ColorMode::Gradient,
+            ColorMode::Vertical,
+            ColorMode::Bands,
+            ColorMode::Single,
+        ] {
+            palette.change_mode(true);
+            assert_eq!(palette.mode, expected);
+        }
+        // Backwards wraps around the other way.
+        for expected in [
+            ColorMode::Bands,
+            ColorMode::Vertical,
+            ColorMode::Gradient,
+            ColorMode::Single,
+        ] {
+            palette.change_mode(false);
+            assert_eq!(palette.mode, expected);
+        }
     }
 
     #[test]
