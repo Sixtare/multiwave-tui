@@ -6,11 +6,13 @@ pub const SQUARE_ROWS: usize = 10;
 /// Rows of the hue strip, which is as tall as the square.
 pub const HUE_ROWS: usize = SQUARE_ROWS;
 
-/// Step of one key press: exactly one cell of the square or one row of the hue strip, so every
-/// press visibly moves the cursor. Holding Shift divides it by [`FINE`] for precise picks.
-const SATURATION_STEP: f32 = 1.0 / (SQUARE_COLS - 1) as f32;
-const VALUE_STEP: f32 = 1.0 / (SQUARE_ROWS - 1) as f32;
-const HUE_STEP: f32 = 360.0 / (HUE_ROWS - 1) as f32;
+/// Step of one key press, small enough to tell neighbouring shades apart (the hue goes in 10
+/// degree steps, so red and pink are several presses apart) while each press still changes the
+/// swatch, the square's colors and the bars. Holding Shift divides it by [`FINE`] for precise
+/// picks.
+const SATURATION_STEP: f32 = 0.025;
+const VALUE_STEP: f32 = 0.05;
+const HUE_STEP: f32 = 10.0;
 const FINE: f32 = 5.0;
 
 /// Which part of the color picker the arrow keys and typing act on.
@@ -106,18 +108,31 @@ mod tests {
     }
 
     #[test]
-    fn test_every_press_moves_the_cursor_one_cell() {
+    fn test_two_presses_move_the_square_cursor_one_cell() {
         let mut picker = ColorPicker::new(BarColor::rgb(255, 0, 0));
         let (col, row) = picker.square_cursor();
         picker.nudge(-1, 1, false);
+        picker.nudge(-1, 1, false);
         assert_eq!(picker.square_cursor(), (col - 1, row + 1));
         picker.nudge(-1, 1, false);
+        picker.nudge(-1, 1, false);
         assert_eq!(picker.square_cursor(), (col - 2, row + 2));
+    }
 
+    #[test]
+    fn test_hue_steps_reach_the_shades_between_red_and_pink() {
+        let mut picker = ColorPicker::new(BarColor::rgb(255, 0, 0));
         picker.next_focus();
-        let hue_row = picker.hue_row();
-        picker.nudge(0, 1, false);
-        assert_eq!(picker.hue_row(), hue_row + 1);
+        // Red is hue 0 and a pink-red is a few steps before 360, so go the other way round.
+        picker.nudge(0, 1000, false);
+        let mut seen = vec![picker.color()];
+        for _ in 0..3 {
+            picker.nudge(0, -1, false);
+            seen.push(picker.color());
+        }
+        assert_eq!(picker.hue, 330.0);
+        assert!(seen.windows(2).all(|pair| pair[0] != pair[1]));
+        assert_eq!(seen[3], BarColor::rgb(255, 0, 128));
     }
 
     #[test]
@@ -158,9 +173,9 @@ mod tests {
         picker.nudge(5, 0, false);
         assert_eq!(picker.hue, 0.0);
         picker.nudge(0, 1, false);
-        assert_eq!(picker.hue, 40.0);
+        assert_eq!(picker.hue, 10.0);
         picker.nudge(0, 1, true);
-        assert_eq!(picker.hue, 48.0);
+        assert!((picker.hue - 12.0).abs() < 1e-3);
         picker.nudge(0, -1, false);
         picker.nudge(0, -1, true);
         assert_eq!(picker.hue, 0.0);

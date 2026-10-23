@@ -826,7 +826,7 @@ mod tests {
         app.open_color_popup();
         app.select_next_color_row();
         app.activate_color_row();
-        app.edit_color_picker(|picker| picker.nudge(-100, 100, true));
+        app.edit_color_picker(|picker| picker.nudge(-100, 100, false));
 
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
