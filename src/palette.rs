@@ -97,15 +97,14 @@ impl BarColor {
     }
 }
 
-/// How the bars are colored: one color per third of the spectrum, or a single color throughout.
+/// How the bars are colored: one color per third of the spectrum, or the bass color throughout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Palette {
-    /// Whether every bar uses [`Palette::single`] instead of the three band colors.
+    /// Whether the mids and treble follow the bass color instead of using their own.
     pub single_mode: bool,
-    /// Colors of the bass, mids and treble thirds.
+    /// Colors of the bass, mids and treble thirds. The mids and treble colors are kept while
+    /// single-color mode hides them.
     pub bands: [BarColor; 3],
-    /// Color of every bar in single-color mode.
-    pub single: BarColor,
 }
 
 impl Default for Palette {
@@ -113,71 +112,64 @@ impl Default for Palette {
         Self {
             single_mode: false,
             bands: [BarColor::Cyan, BarColor::Green, BarColor::Magenta],
-            single: BarColor::Cyan,
         }
     }
 }
 
 impl Palette {
-    /// Most rows the picker ever shows (gradient mode).
-    pub const MAX_ROWS: usize = 4;
+    /// Rows the picker shows: the mode row plus bass, mids and treble.
+    pub const ROWS: usize = 4;
 
-    /// Number of rows the picker shows: the mode row plus one per editable color.
+    /// Rows the cursor can reach. In single-color mode the mids and treble are grayed out.
     pub fn row_count(&self) -> usize {
-        if self.single_mode { 2 } else { Self::MAX_ROWS }
+        if self.single_mode { 2 } else { Self::ROWS }
     }
 
-    /// The color a picker row edits (row 0 is the mode and has none).
+    /// The color a picker row shows (row 0 is the mode and has none). In single-color mode the
+    /// mids and treble rows show the bass color they follow.
     pub fn row_color(&self, row: usize) -> Option<BarColor> {
-        match (row, self.single_mode) {
-            (0, _) => None,
-            (1, true) => Some(self.single),
-            (1..=3, false) => Some(self.bands[row - 1]),
+        match row {
+            1..=3 => Some(self.band_color(row - 1)),
             _ => None,
         }
     }
 
-    /// Flips between gradient and single-color mode.
-    ///
-    /// Switching to single-color mode starts from the bass color; each mode keeps its own colors.
-    pub fn toggle_mode(&mut self) {
-        self.single_mode = !self.single_mode;
+    /// The color a band is drawn with.
+    fn band_color(&self, band: usize) -> BarColor {
         if self.single_mode {
-            self.single = self.bands[0];
+            self.bands[0]
+        } else {
+            self.bands[band]
         }
     }
 
-    /// Sets the color a picker row edits (row 0 is the mode and has none).
+    /// Flips between gradient and single-color mode.
+    pub fn toggle_mode(&mut self) {
+        self.single_mode = !self.single_mode;
+    }
+
+    /// Sets the color a picker row edits (row 0 is the mode and has none). Only the bass can be
+    /// edited in single-color mode.
     pub fn set_row_color(&mut self, row: usize, color: BarColor) {
-        match (row, self.single_mode) {
-            (1, true) => self.single = color,
-            (1..=3, false) => self.bands[row - 1] = color,
-            _ => {}
+        if (1..self.row_count()).contains(&row) {
+            self.bands[row - 1] = color;
         }
     }
 
     /// The colors of the bass, mids and treble thirds.
     pub fn colors(&self) -> [Color; 3] {
-        if self.single_mode {
-            [self.single.color(); 3]
-        } else {
-            self.bands.map(BarColor::color)
-        }
+        [0, 1, 2].map(|band| self.band_color(band).color())
     }
 
     /// The darker mirror tones of the bass, mids and treble thirds.
     pub fn mirror_colors(&self) -> [Color; 3] {
-        if self.single_mode {
-            [self.single.mirror_color(); 3]
-        } else {
-            self.bands.map(BarColor::mirror_color)
-        }
+        [0, 1, 2].map(|band| self.band_color(band).mirror_color())
     }
 
     /// Short description for the on-screen notice.
     pub fn describe(&self) -> String {
         if self.single_mode {
-            self.single.name().to_string()
+            self.bands[0].name().to_string()
         } else {
             "Gradient".to_string()
         }
@@ -214,31 +206,33 @@ mod tests {
     }
 
     #[test]
-    fn test_single_mode_starts_from_bass_and_keeps_bands() {
+    fn test_single_mode_makes_mids_and_treble_follow_the_bass() {
         let mut palette = Palette::default();
-        palette.set_row_color(1, BarColor::Green);
         palette.toggle_mode();
         assert!(palette.single_mode);
-        assert_eq!(palette.single, BarColor::Green);
         assert_eq!(palette.row_count(), 2);
+        assert_eq!(palette.row_color(3), Some(BarColor::Cyan));
 
         palette.set_row_color(1, BarColor::Lime);
+        // Mids and treble cannot be edited while they follow the bass.
+        palette.set_row_color(2, BarColor::Red);
         assert_eq!(palette.colors(), [BarColor::Lime.color(); 3]);
         assert_eq!(palette.mirror_colors(), [BarColor::Lime.mirror_color(); 3]);
+        assert_eq!(palette.describe(), "Lime");
 
+        // Going back to the gradient brings back the mids and treble colors.
         palette.toggle_mode();
-        assert!(!palette.single_mode);
-        assert_eq!(palette.bands[0], BarColor::Green);
         assert_eq!(palette.row_count(), 4);
+        assert_eq!(
+            palette.bands,
+            [BarColor::Lime, BarColor::Green, BarColor::Magenta]
+        );
     }
 
     #[test]
-    fn test_row_color_follows_the_mode() {
-        let mut palette = Palette::default();
+    fn test_row_color_is_none_for_the_mode_row() {
+        let palette = Palette::default();
         assert_eq!(palette.row_color(0), None);
         assert_eq!(palette.row_color(3), Some(BarColor::Magenta));
-        palette.single_mode = true;
-        assert_eq!(palette.row_color(1), Some(BarColor::Cyan));
-        assert_eq!(palette.row_color(2), None);
     }
 }

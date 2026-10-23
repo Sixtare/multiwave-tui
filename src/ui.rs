@@ -264,8 +264,7 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
 fn render_color_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let palette = &app.palette;
-    // Same size in both modes, so the box does not jump when the mode changes.
-    let height = (Palette::MAX_ROWS as u16 + 2).min(area.height);
+    let height = (Palette::ROWS as u16 + 2).min(area.height);
     let popup_area = area.centered(
         Constraint::Length(34.min(area.width)),
         Constraint::Length(height),
@@ -283,23 +282,22 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, popup_area);
     frame.render_widget(block, popup_area);
 
-    let labels: &[&str] = if palette.single_mode {
-        &["Mode", "Color"]
-    } else {
-        &["Mode", "Bass", "Mids", "Treble"]
-    };
-    let lines: Vec<Line> = labels
+    let lines: Vec<Line> = ["Mode", "Bass", "Mids", "Treble"]
         .iter()
         .enumerate()
         .map(|(row, label)| {
+            // In single-color mode the mids and treble just follow the bass.
+            let grayed_out = row >= palette.row_count();
             let selected = row == app.color_row;
-            let text_style = if selected {
+            let text_style = if grayed_out {
+                Style::default().fg(Color::DarkGray)
+            } else if selected {
                 Style::default().fg(Color::Cyan).bold()
             } else {
                 Style::default().fg(Color::White)
             };
             let value = match palette.row_color(row) {
-                Some(color) => color_value(color),
+                Some(color) => color_value(color, text_style),
                 None => vec![Span::styled(
                     if palette.single_mode {
                         "Single color"
@@ -372,7 +370,7 @@ fn render_color_list(frame: &mut Frame, popup_area: Rect, cursor: usize) {
                 Style::default().fg(Color::White)
             };
             let mut spans = vec![Span::styled(if i == cursor { "> " } else { "  " }, style)];
-            spans.extend(color_value(color));
+            spans.extend(color_value(color, Style::default()));
             Line::from(spans)
         })
         .collect();
@@ -380,10 +378,10 @@ fn render_color_list(frame: &mut Frame, popup_area: Rect, cursor: usize) {
 }
 
 /// A color swatch followed by the color's name.
-fn color_value(color: BarColor) -> Vec<Span<'static>> {
+fn color_value(color: BarColor, name_style: Style) -> Vec<Span<'static>> {
     vec![
         Span::styled("████", Style::default().fg(color.color())),
-        Span::raw(format!(" {}", color.name())),
+        Span::styled(format!(" {}", color.name()), name_style),
     ]
 }
 
@@ -729,21 +727,32 @@ mod tests {
     }
 
     #[test]
-    fn test_color_popup_keeps_its_size_in_single_color_mode() {
-        let height_of = |app: &mut App| {
+    fn test_single_color_mode_grays_out_mids_and_treble_and_keeps_the_size() {
+        let render_popup_rows = |app: &mut App| {
             let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
             terminal.draw(|frame| render(app, frame)).unwrap();
-            let buffer = terminal.backend().buffer();
+            let buffer = terminal.backend().buffer().clone();
             let top = (0..20).find(|&y| buffer[(23, y)].symbol() == "╭").unwrap();
             let bottom = (0..20).find(|&y| buffer[(23, y)].symbol() == "╰").unwrap();
-            bottom - top
+            (bottom - top, top, buffer)
         };
         let mut app = App::new();
         app.open_color_popup();
-        let gradient = height_of(&mut app);
+        let (gradient_height, _, _) = render_popup_rows(&mut app);
         app.activate_color_row();
         assert!(app.palette.single_mode);
-        assert_eq!(height_of(&mut app), gradient);
+        let (height, top, buffer) = render_popup_rows(&mut app);
+        assert_eq!(height, gradient_height);
+
+        // Rows after the border: mode, bass, mids, treble. Mids and treble are dark gray text
+        // with the bass color's swatch; the bass row is not grayed out.
+        let swatch_x = 23 + 1 + 2 + 7;
+        let label = |y: u16| buffer[(25, y)].fg;
+        assert_eq!(label(top + 2), Color::White);
+        assert_eq!(label(top + 3), Color::DarkGray);
+        assert_eq!(label(top + 4), Color::DarkGray);
+        assert_eq!(buffer[(swatch_x, top + 3)].fg, Color::Cyan);
+        assert_eq!(buffer[(swatch_x, top + 4)].fg, Color::Cyan);
     }
 
     #[test]
