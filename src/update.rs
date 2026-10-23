@@ -10,6 +10,8 @@ use crate::{
 pub enum AppAction {
     /// Request to change the active captured audio device to the specified index.
     ChangeDevice(usize),
+    /// Make the running capture produce this many bars.
+    SetBarCount(usize),
     /// Rebuild capture after the audio callback reported a lost or invalidated stream.
     RecoverLostDevice,
     /// Check whether the default output or device list changed (rate-limited by `SoundDevice`).
@@ -32,6 +34,12 @@ pub struct BatchOutcome {
 pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
     let mut outcome = BatchOutcome::default();
     let has_tick = batch.has_tick();
+    let bar_count_before = app.bar_count;
+
+    // Applied first so keys and audio frames in the same batch see the new terminal width.
+    if let Some(width) = batch.latest_width {
+        app.set_terminal_width(width);
+    }
 
     if let Some(bars) = batch.latest_bars {
         // Update application state with bars calculated by realfft
@@ -52,6 +60,11 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
         if app.should_quit {
             return BatchOutcome::default();
         }
+    }
+
+    // Keys and resizes can both change the bar count; the capture only needs the final one.
+    if app.bar_count != bar_count_before {
+        outcome.actions.push(AppAction::SetBarCount(app.bar_count));
     }
 
     for _ in 0..batch.ticks {
@@ -102,8 +115,8 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('s') => {
             app.show_popup = true;
         }
-        KeyCode::Right | KeyCode::Char('l') => app.increment_counter(),
-        KeyCode::Left | KeyCode::Char('j') => app.decrement_counter(),
+        KeyCode::Right | KeyCode::Char('l') => app.increase_bar_count(),
+        KeyCode::Left | KeyCode::Char('j') => app.decrease_bar_count(),
         KeyCode::Up | KeyCode::Char('i') => app.increase_gain(),
         KeyCode::Down | KeyCode::Char('k') => app.decrease_gain(),
         _ => {}
@@ -131,6 +144,7 @@ mod tests {
     #[test]
     fn test_batch_applies_keys_and_latest_bars_with_one_draw() {
         let mut app = App::new();
+        app.set_terminal_width(200);
         let mut events: Vec<Event> = (1..=50)
             .map(|level| Event::AudioBars(vec![level as f32 / 50.0; 32]))
             .collect();
@@ -141,35 +155,44 @@ mod tests {
 
         let outcome = apply_batch(&mut app, batch_of(events));
 
-        // Only the last bars frame matters: same state as a batch holding just that frame.
+        // Only the last bars frame matters: same state as applying just that frame, then the
+        // two key presses and the two ticks one by one.
         let mut expected = App::new();
-        apply_batch(
-            &mut expected,
-            batch_of(vec![
-                Event::AudioBars(vec![1.0; 32]),
-                Event::Tick,
-                Event::Tick,
-            ]),
-        );
-        assert_eq!(app.counter, 2);
+        expected.set_terminal_width(200);
+        expected.update_audio_bars(vec![1.0; 32]);
+        expected.increase_bar_count();
+        expected.increase_bar_count();
+        expected.tick();
+        expected.tick();
+        assert_eq!(app.bar_count, 48);
         assert_eq!(app.target_bars, expected.target_bars);
         assert_eq!(app.audio_bars, expected.audio_bars);
         assert_eq!(app.tick_counter, 2);
         assert!(outcome.draw);
-        assert_eq!(outcome.actions, vec![AppAction::PollDevices]);
+        assert_eq!(
+            outcome.actions,
+            vec![AppAction::SetBarCount(48), AppAction::PollDevices]
+        );
     }
 
     #[test]
     fn test_batch_without_tick_does_not_draw() {
         let mut app = App::new();
+        app.set_terminal_width(200);
 
         let outcome = apply_batch(
             &mut app,
-            batch_of(vec![Event::AudioBars(vec![0.5; 32]), key(KeyCode::Right)]),
+            batch_of(vec![Event::AudioBars(vec![0.5; 40]), key(KeyCode::Right)]),
         );
 
-        assert_eq!(app.counter, 1);
-        assert_eq!(outcome, BatchOutcome::default());
+        assert_eq!(app.bar_count, 40);
+        assert_eq!(
+            outcome,
+            BatchOutcome {
+                actions: vec![AppAction::SetBarCount(40)],
+                draw: false,
+            }
+        );
     }
 
     #[test]
@@ -211,5 +234,99 @@ mod tests {
         assert!(app.show_popup, "keys after the quit must not run");
         assert_eq!(app.tick_counter, 0);
         assert_eq!(outcome, BatchOutcome::default());
+    }
+
+    #[test]
+    fn test_resize_shrinks_bars_and_asks_the_capture_to_follow() {
+        let mut app = App::new();
+        app.set_terminal_width(400);
+        for _ in 0..8 {
+            app.increase_bar_count();
+        }
+
+        let outcome = apply_batch(&mut app, batch_of(vec![Event::Resize(120, 40)]));
+
+        assert_eq!(app.bar_count, 60);
+        assert_eq!(outcome.actions, vec![AppAction::SetBarCount(60)]);
+
+        let outcome = apply_batch(&mut app, batch_of(vec![Event::Resize(400, 40)]));
+
+        assert_eq!(app.bar_count, 96);
+        assert_eq!(outcome.actions, vec![AppAction::SetBarCount(96)]);
+    }
+
+    #[test]
+    fn test_several_bar_keys_in_one_batch_send_only_the_final_count() {
+        let mut app = App::new();
+        app.set_terminal_width(400);
+
+        let outcome = apply_batch(
+            &mut app,
+            batch_of(vec![
+                key(KeyCode::Right),
+                key(KeyCode::Right),
+                key(KeyCode::Char('l')),
+                key(KeyCode::Left),
+            ]),
+        );
+
+        assert_eq!(app.bar_count, 48);
+        assert_eq!(outcome.actions, vec![AppAction::SetBarCount(48)]);
+    }
+
+    #[test]
+    fn test_unchanged_bar_count_sends_no_action() {
+        let mut app = App::new();
+        app.set_terminal_width(400);
+
+        let outcome = apply_batch(
+            &mut app,
+            batch_of(vec![key(KeyCode::Left), Event::Resize(500, 40)]),
+        );
+
+        assert!(outcome.actions.is_empty());
+    }
+
+    #[test]
+    fn test_resize_applies_before_keys_in_the_same_batch() {
+        let mut app = App::new();
+
+        apply_batch(
+            &mut app,
+            batch_of(vec![key(KeyCode::Right), Event::Resize(200, 40)]),
+        );
+
+        assert_eq!(app.bar_count, 40);
+    }
+
+    #[test]
+    fn test_horizontal_arrows_and_j_l_change_bar_count_not_gain() {
+        let mut app = App::new();
+        app.set_terminal_width(400);
+        let gain = app.gain;
+
+        update(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.bar_count, 40);
+        update(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.bar_count, 32);
+        assert_eq!(app.gain, gain);
+    }
+
+    #[test]
+    fn test_popup_open_does_not_change_bar_count() {
+        let mut app = App::with_devices(vec!["A".into(), "B".into()], 0);
+        app.set_terminal_width(400);
+        app.show_popup = true;
+
+        update(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        update(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        );
+
+        assert_eq!(app.bar_count, 32);
     }
 }

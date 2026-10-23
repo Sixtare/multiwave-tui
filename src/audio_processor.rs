@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub struct AudioProcessor {
     channels: usize,
     fft_size: usize,
+    sample_rate: u32,
     num_bars: usize,
     pub gain: f32,
     sample_accumulator: Vec<f32>,
@@ -16,7 +17,73 @@ pub struct AudioProcessor {
     output_buffer: Vec<realfft::num_complex::Complex<f32>>,
     window: Vec<f32>,
     bin_ranges: Vec<(usize, usize)>,
+    /// For bars narrower than one FFT bin: the lower bin and the fraction towards the next one.
+    interpolation: Vec<Option<(usize, f32)>>,
     frequency_weights: Vec<f32>,
+}
+
+/// Lowest and highest frequencies covered by the bars, in Hz.
+const MIN_FREQ: f32 = 40.0;
+const MAX_FREQ: f32 = 16000.0;
+
+/// Per-bar frequency layout derived from the bar count and the stream's sample rate.
+struct BandLayout {
+    bin_ranges: Vec<(usize, usize)>,
+    interpolation: Vec<Option<(usize, f32)>>,
+    frequency_weights: Vec<f32>,
+}
+
+impl BandLayout {
+    fn new(sample_rate: u32, fft_size: usize, num_bars: usize) -> Self {
+        let sample_rate = sample_rate as f32;
+        let total_bins = fft_size / 2; // 512 usable bins for fft_size 1024
+        let bins_per_hz = fft_size as f32 / sample_rate;
+
+        let mut bin_ranges = Vec::with_capacity(num_bars);
+        let mut interpolation = Vec::with_capacity(num_bars);
+        for i in 0..num_bars {
+            let f_start = MIN_FREQ * (MAX_FREQ / MIN_FREQ).powf(i as f32 / num_bars as f32);
+            let f_end = MIN_FREQ * (MAX_FREQ / MIN_FREQ).powf((i + 1) as f32 / num_bars as f32);
+
+            let bin_start = (f_start * bins_per_hz).round() as usize;
+            let bin_start = bin_start.clamp(1, total_bins.saturating_sub(1));
+
+            let bin_end = (f_end * bins_per_hz).round() as usize;
+            let bin_end = bin_end.clamp(bin_start + 1, total_bins);
+
+            bin_ranges.push((bin_start, bin_end));
+
+            // A bar narrower than one FFT bin would repeat its neighbours' value as a plateau.
+            // Read it at its center frequency, interpolating between the two surrounding bins.
+            if (f_end - f_start) * bins_per_hz < 1.0 {
+                let center = (f_start * f_end).sqrt() * bins_per_hz;
+                let lower = (center.floor() as usize).clamp(1, total_bins.saturating_sub(1));
+                interpolation.push(Some((lower, (center - lower as f32).clamp(0.0, 1.0))));
+            } else {
+                interpolation.push(None);
+            }
+        }
+
+        // Frequency compensation curve (treble/mid boost): bar 0 (lowest bass) has weight 1.0 so
+        // bass is not reduced, and the other bars get a progressive gain to counter the natural
+        // 1/f energy roll-off.
+        let mut frequency_weights = Vec::with_capacity(num_bars);
+        for i in 0..num_bars {
+            let t = if num_bars > 1 {
+                i as f32 / (num_bars - 1) as f32
+            } else {
+                0.0
+            };
+            // 1.0 on bar 0 up to ~6.0 on the highest bar
+            frequency_weights.push(1.0 + 5.0 * t.powf(0.85));
+        }
+
+        Self {
+            bin_ranges,
+            interpolation,
+            frequency_weights,
+        }
+    }
 }
 
 impl AudioProcessor {
@@ -55,44 +122,12 @@ impl AudioProcessor {
             .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / (fft_size - 1) as f32).cos()))
             .collect();
 
-        // Divisão de frequências com distribuição logarítmica (faixas de 40 Hz até 16.000 Hz)
-        let sample_rate = sample_rate as f32;
-        let min_freq: f32 = 40.0;
-        let max_freq: f32 = 16000.0;
-        let total_bins = fft_size / 2; // 512 bins utilizáveis para fft_size 1024
-
-        let mut bin_ranges = Vec::with_capacity(num_bars);
-        for i in 0..num_bars {
-            let f_start = min_freq * (max_freq / min_freq).powf(i as f32 / num_bars as f32);
-            let f_end = min_freq * (max_freq / min_freq).powf((i + 1) as f32 / num_bars as f32);
-
-            let bin_start = (f_start * fft_size as f32 / sample_rate).round() as usize;
-            let bin_start = bin_start.clamp(1, total_bins.saturating_sub(1));
-
-            let bin_end = (f_end * fft_size as f32 / sample_rate).round() as usize;
-            let bin_end = bin_end.clamp(bin_start + 1, total_bins);
-
-            bin_ranges.push((bin_start, bin_end));
-        }
-
-        // Curva de compensação de ganho por frequência (Treble/Mid boost):
-        // A barra 0 (graves mais baixos) tem peso 1.0 (não reduz os graves).
-        // As demais barras recebem um ganho progressivo para compensar o rolloff natural de energia (1/f).
-        let mut frequency_weights = Vec::with_capacity(num_bars);
-        for i in 0..num_bars {
-            let t = if num_bars > 1 {
-                i as f32 / (num_bars - 1) as f32
-            } else {
-                0.0
-            };
-            // 1.0 na barra 0 até ~6.0 na barra mais aguda
-            let weight = 1.0 + 5.0 * t.powf(0.85);
-            frequency_weights.push(weight);
-        }
+        let layout = BandLayout::new(sample_rate, fft_size, num_bars);
 
         Self {
             channels: channels.max(1),
             fft_size,
+            sample_rate,
             num_bars,
             gain,
             sample_accumulator: Vec::with_capacity(fft_size * 2),
@@ -100,9 +135,27 @@ impl AudioProcessor {
             input_buffer,
             output_buffer,
             window,
-            bin_ranges,
-            frequency_weights,
+            bin_ranges: layout.bin_ranges,
+            interpolation: layout.interpolation,
+            frequency_weights: layout.frequency_weights,
         }
+    }
+
+    /// Changes the number of bars produced from now on, keeping the buffered samples.
+    pub fn set_num_bars(&mut self, num_bars: usize) {
+        assert!(
+            num_bars > 0 && num_bars <= self.fft_size / 2,
+            "num_bars out of range for the fft_size"
+        );
+        if num_bars == self.num_bars {
+            return;
+        }
+
+        let layout = BandLayout::new(self.sample_rate, self.fft_size, num_bars);
+        self.num_bars = num_bars;
+        self.bin_ranges = layout.bin_ranges;
+        self.interpolation = layout.interpolation;
+        self.frequency_weights = layout.frequency_weights;
     }
 
     /// Processa um bloco de amostras cruas intercaladas vindas do CPAL.
@@ -143,21 +196,25 @@ impl AudioProcessor {
 
                 // 5. Agrupamento de Frequências (Binning com espaçamento acústico)
                 for i in 0..self.num_bars {
-                    let (start, end) = self.bin_ranges[i];
-                    let slice = if start < magnitudes.len() {
-                        let actual_end = end.min(magnitudes.len());
-                        &magnitudes[start..actual_end]
+                    let magnitude = if let Some((lower, fraction)) = self.interpolation[i] {
+                        magnitudes[lower] * (1.0 - fraction) + magnitudes[lower + 1] * fraction
                     } else {
-                        &[]
-                    };
+                        let (start, end) = self.bin_ranges[i];
+                        let slice = if start < magnitudes.len() {
+                            let actual_end = end.min(magnitudes.len());
+                            &magnitudes[start..actual_end]
+                        } else {
+                            &[]
+                        };
 
-                    let magnitude = if !slice.is_empty() {
-                        let avg = slice.iter().sum::<f32>() / slice.len() as f32;
-                        let max = slice.iter().cloned().fold(0.0, f32::max);
-                        // Combina a média com o pico da faixa para destacar transientes e pratos
-                        0.5 * avg + 0.5 * max
-                    } else {
-                        0.0
+                        if !slice.is_empty() {
+                            let avg = slice.iter().sum::<f32>() / slice.len() as f32;
+                            let max = slice.iter().cloned().fold(0.0, f32::max);
+                            // Combina a média com o pico da faixa para destacar transientes e pratos
+                            0.5 * avg + 0.5 * max
+                        } else {
+                            0.0
+                        }
                     };
 
                     // 6. Normalização com compensação de resposta para médios e agudos
@@ -255,6 +312,67 @@ mod tests {
         let at_48k = AudioProcessor::new(2, 48_000, 1024, 32, 1.0);
 
         assert_ne!(at_44k.bin_ranges, at_48k.bin_ranges);
+    }
+
+    #[test]
+    fn test_narrow_bars_are_interpolated_instead_of_repeating_a_bin() {
+        let processor = AudioProcessor::new(2, 48_000, 1024, 256, 1.0);
+
+        // With 256 bars the lowest ones are far narrower than one ~47 Hz FFT bin.
+        assert!(processor.interpolation[0].is_some());
+        assert!(processor.interpolation[255].is_none());
+
+        // Interpolated bars read distinct positions between bins instead of one shared bin.
+        let positions: Vec<f32> = processor
+            .interpolation
+            .iter()
+            .flatten()
+            .map(|&(lower, fraction)| lower as f32 + fraction)
+            .collect();
+        let distinct = positions
+            .windows(2)
+            .filter(|pair| pair[1] > pair[0])
+            .count();
+        assert!(
+            distinct * 2 > positions.len(),
+            "{distinct} of {}",
+            positions.len()
+        );
+        assert!(positions.windows(2).all(|pair| pair[1] >= pair[0]));
+    }
+
+    #[test]
+    fn test_interpolated_bar_blends_neighbouring_bins() {
+        let mut processor = AudioProcessor::new(2, 48_000, 1024, 32, 1.0);
+        // Bar 5 is narrower than a bin at 32 bars; put it midway between bins 3 and 4.
+        processor.interpolation[5] = Some((3, 0.5));
+
+        // A 3.5-bin sine (~164 Hz) leaks equally into bins 3 and 4.
+        let freq = 3.5 * 48_000.0 / 1024.0;
+        let samples: Vec<f32> = (0..1024)
+            .flat_map(|i| {
+                let value = (2.0 * PI * freq * i as f32 / 48_000.0).sin();
+                [value, value]
+            })
+            .collect();
+        let bars = processor.process_interleaved_samples(&samples).remove(0);
+
+        assert!(bars[5] > 0.0);
+    }
+
+    #[test]
+    fn test_set_num_bars_changes_output_length() {
+        let mut processor = AudioProcessor::new(2, 48_000, 1024, 32, 1.0);
+        let samples = vec![0.5; 2048];
+        assert_eq!(processor.process_interleaved_samples(&samples)[0].len(), 32);
+
+        processor.set_num_bars(96);
+
+        let bars = processor.process_interleaved_samples(&samples);
+        assert_eq!(bars[0].len(), 96);
+        assert_eq!(processor.frequency_weights.len(), 96);
+        assert_eq!(processor.frequency_weights[0], 1.0);
+        assert!(processor.frequency_weights[95] >= 5.0);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use ratatui::{
     },
 };
 
-use crate::app::App;
+use crate::app::{App, COLUMNS_PER_BAR};
 
 /// Everything [`render`] reads from the app, plus the terminal size.
 ///
@@ -27,6 +27,8 @@ pub struct FrameState {
     active_device_idx: usize,
     device_scroll_offset: usize,
     audio_error: Option<String>,
+    /// Bar count announcement, while it is on screen.
+    bar_notice: Option<usize>,
 }
 
 impl FrameState {
@@ -45,6 +47,7 @@ impl FrameState {
             active_device_idx: app.active_device_idx,
             device_scroll_offset: app.device_scroll_offset,
             audio_error: app.audio_error.clone(),
+            bar_notice: app.bar_notice().filter(|_| !app.show_popup),
         }
     }
 }
@@ -56,9 +59,36 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         true => render_popup(frame, app),
     }
 
+    if let Some(count) = app.bar_notice().filter(|_| !app.show_popup) {
+        render_bar_notice(frame, count);
+    }
+
     if let Some(error) = &app.audio_error {
         render_audio_error(frame, error);
     }
+}
+
+/// Draws the bar count in the top-right corner, e.g. ` 64 bars `.
+fn render_bar_notice(frame: &mut Frame, count: usize) {
+    let area = frame.area();
+    let text = format!(" {count} bars ");
+    let width = (text.chars().count() as u16).min(area.width);
+    if width == 0 || area.height == 0 {
+        return;
+    }
+
+    let notice_area = Rect {
+        x: area.x + area.width - width,
+        y: area.y,
+        width,
+        height: 1,
+    };
+
+    frame.render_widget(Clear, notice_area);
+    frame.render_widget(
+        Paragraph::new(Line::styled(text, Style::default().fg(Color::DarkGray))),
+        notice_area,
+    );
 }
 
 /// Draws the current audio error as a status line at the bottom of the screen.
@@ -241,7 +271,7 @@ impl Widget for Soundwave<'_> {
         // Each bar is a glyph followed by a spacer. The row is centered horizontally; when the
         // terminal is narrower than the row, the treble side is clipped.
         let bar_count = self.bars.len();
-        let row_width = bar_count * 2;
+        let row_width = bar_count * COLUMNS_PER_BAR;
         let visible_width = row_width.min(area.width as usize);
         let left = area.x + (area.width - visible_width as u16) / 2;
         let mut set_cell = |column: usize, y: u16, glyph: char, color: Color| {
@@ -363,6 +393,35 @@ mod tests {
         assert_ne!(before, FrameState::capture(&app, Size::new(100, 24)));
         app.update_audio_bars(vec![0.5; 32]);
         assert_ne!(before, FrameState::capture(&app, SIZE));
+    }
+
+    #[test]
+    fn test_frame_state_changes_while_the_bar_notice_is_visible() {
+        let mut app = App::new();
+        app.set_terminal_width(200);
+        let before = FrameState::capture(&app, SIZE);
+
+        app.increase_bar_count();
+        let during = FrameState::capture(&app, SIZE);
+        assert_ne!(before, during);
+
+        for _ in 0..90 {
+            app.tick();
+        }
+        let after = FrameState::capture(&app, SIZE);
+        assert_ne!(during, after);
+        assert_eq!(after.bar_notice, None);
+    }
+
+    #[test]
+    fn test_bar_notice_is_drawn_in_the_top_right_corner() {
+        let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
+        terminal.draw(|frame| render_bar_notice(frame, 64)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let top_row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
+        assert!(top_row.ends_with(" 64 bars "), "{top_row:?}");
+        assert!(top_row.starts_with(' '));
     }
 
     #[test]

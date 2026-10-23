@@ -19,7 +19,7 @@ pub mod sound_device;
 /// Application updater.
 pub mod update;
 
-use app::App;
+use app::{App, MIN_BARS};
 use color_eyre::Result;
 use event::EventHandler;
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -28,8 +28,6 @@ use std::io::BufWriter;
 use tui::Tui;
 use update::{AppAction, apply_batch};
 
-/// Number of spectrum bars produced by the audio processor.
-const NUM_BARS: usize = 32;
 /// Gain the audio processor applies to normalized FFT magnitudes.
 const CAPTURE_GAIN: f32 = 2.5;
 /// Sized to hold a typical full-screen frame, so a draw reaches the console in a few writes.
@@ -63,11 +61,11 @@ fn main() -> Result<()> {
     let audio_sender = events.sender();
 
     // Initialize sound device capture
-    let mut sound_device = SoundDevice::new().ok();
+    let mut sound_device = SoundDevice::new(MIN_BARS).ok();
     let mut startup_error = None;
     let (device_names, active_idx) = match sound_device.as_mut() {
         Some(dev) => {
-            if let Err(e) = dev.start_capture(audio_sender.clone(), NUM_BARS, CAPTURE_GAIN) {
+            if let Err(e) = dev.start_capture(audio_sender.clone(), CAPTURE_GAIN) {
                 startup_error = Some(format!("Failed to start audio stream: {e}"));
             }
             (dev.device_names(), dev.active_idx)
@@ -94,6 +92,7 @@ fn main() -> Result<()> {
     let terminal = Terminal::new(backend)?;
     let mut tui = Tui::new(terminal, events);
     tui.enter()?;
+    app.set_terminal_width(tui.width()?);
 
     // Main application loop
     tui.draw_if_changed(&mut app)?;
@@ -106,12 +105,7 @@ fn main() -> Result<()> {
             match action {
                 AppAction::ChangeDevice(new_idx) => {
                     if let Some(ref mut dev) = sound_device {
-                        match dev.switch_device(
-                            new_idx,
-                            audio_sender.clone(),
-                            NUM_BARS,
-                            CAPTURE_GAIN,
-                        ) {
+                        match dev.switch_device(new_idx, audio_sender.clone(), CAPTURE_GAIN) {
                             Ok(()) => {
                                 app.active_device_idx = new_idx;
                                 app.clear_audio_error();
@@ -124,12 +118,16 @@ fn main() -> Result<()> {
                         app.set_audio_error("No audio output device available");
                     }
                 }
+                AppAction::SetBarCount(count) => {
+                    if let Some(ref dev) = sound_device {
+                        dev.set_num_bars(count);
+                    }
+                }
                 AppAction::RecoverLostDevice => {
                     if let Some(ref mut dev) = sound_device {
                         let update = dev.recover_from_device_loss(
                             app.selected_device_idx,
                             &audio_sender,
-                            NUM_BARS,
                             CAPTURE_GAIN,
                         );
                         apply_device_update(&mut app, update);
@@ -142,7 +140,6 @@ fn main() -> Result<()> {
                         && let Some(update) = dev.poll_device_changes(
                             app.selected_device_idx,
                             &audio_sender,
-                            NUM_BARS,
                             CAPTURE_GAIN,
                         )
                     {

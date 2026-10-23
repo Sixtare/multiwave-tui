@@ -1,11 +1,29 @@
+/// Fewest bars the visualizer shows, even on a terminal too narrow to fit them.
+pub const MIN_BARS: usize = 32;
+/// Most bars the visualizer shows, however wide the terminal is.
+pub const MAX_BARS: usize = 256;
+/// Bars added or removed by each key press.
+pub const BAR_STEP: usize = 8;
+/// Terminal columns used by one bar: its glyph plus a spacer.
+pub const COLUMNS_PER_BAR: usize = 2;
+/// How long the bar count notice stays on screen, in ticks (~1.5 s at 60 FPS).
+const BAR_NOTICE_TICKS: u64 = 90;
+
 #[derive(Debug)]
 pub struct App {
     /// Should the application exit?
     pub should_quit: bool,
-    /// Counter value.
-    pub counter: u8,
     /// Tick counter.
     pub tick_counter: u64,
+    /// Terminal width in columns, which limits how many bars fit.
+    terminal_width: u16,
+    /// Bar count the user asked for. It is kept when the terminal gets too narrow, so the bars
+    /// grow back once there is room again.
+    chosen_bar_count: usize,
+    /// Bar count actually shown: the chosen count limited by what fits the terminal.
+    pub bar_count: usize,
+    /// Tick until which the bar count notice is shown.
+    bar_notice_until: u64,
     /// Vector containing normalized and smoothed audio bar magnitudes (0.0 to 1.0).
     pub audio_bars: Vec<f32>,
     /// Vector containing the target values most recently received from the FFT.
@@ -34,10 +52,13 @@ impl Default for App {
     fn default() -> Self {
         Self {
             should_quit: false,
-            counter: 0,
             tick_counter: 0,
-            audio_bars: vec![0.0; 32],
-            target_bars: vec![0.0; 32],
+            terminal_width: 0,
+            chosen_bar_count: MIN_BARS,
+            bar_count: MIN_BARS,
+            bar_notice_until: 0,
+            audio_bars: vec![0.0; MIN_BARS],
+            target_bars: vec![0.0; MIN_BARS],
             gain: 1.0,
             attack_factor: 0.65,
             decay_factor: 0.20,
@@ -92,15 +113,52 @@ impl App {
         self.audio_error = None;
     }
 
-    pub fn increment_counter(&mut self) {
-        if let Some(res) = self.counter.checked_add(1) {
-            self.counter = res;
-        }
+    /// Most bars that fit the terminal width, never below [`MIN_BARS`] or above [`MAX_BARS`].
+    pub fn max_bar_count(&self) -> usize {
+        (self.terminal_width as usize / COLUMNS_PER_BAR).clamp(MIN_BARS, MAX_BARS)
     }
 
-    pub fn decrement_counter(&mut self) {
-        if let Some(res) = self.counter.checked_sub(1) {
-            self.counter = res;
+    /// Records the terminal width and shrinks or regrows the shown bars to fit it.
+    pub fn set_terminal_width(&mut self, width: u16) {
+        self.terminal_width = width;
+        self.sync_bar_count();
+    }
+
+    /// Shows [`BAR_STEP`] more bars, up to what fits the terminal.
+    pub fn increase_bar_count(&mut self) {
+        let target = (self.bar_count + BAR_STEP).min(self.max_bar_count());
+        self.set_chosen_bar_count(target);
+    }
+
+    /// Shows [`BAR_STEP`] fewer bars, down to [`MIN_BARS`].
+    pub fn decrease_bar_count(&mut self) {
+        let target = self.bar_count.saturating_sub(BAR_STEP).max(MIN_BARS);
+        self.set_chosen_bar_count(target);
+    }
+
+    /// The bar count to announce on screen right after the user changed it.
+    pub fn bar_notice(&self) -> Option<usize> {
+        (self.tick_counter < self.bar_notice_until).then_some(self.bar_count)
+    }
+
+    fn set_chosen_bar_count(&mut self, target: usize) {
+        // Pressing against a limit keeps the previous choice, so a count that is currently
+        // capped by a narrow terminal is not forgotten.
+        if target != self.bar_count {
+            self.chosen_bar_count = target;
+            self.sync_bar_count();
+        }
+        self.bar_notice_until = self.tick_counter + BAR_NOTICE_TICKS;
+    }
+
+    /// Recomputes the shown bar count and stretches the current bars to the new length, so the
+    /// display does not blank out while the audio side catches up.
+    fn sync_bar_count(&mut self) {
+        let count = self.chosen_bar_count.clamp(MIN_BARS, self.max_bar_count());
+        if count != self.bar_count {
+            self.bar_count = count;
+            self.audio_bars = resample(&self.audio_bars, count);
+            self.target_bars = resample(&self.target_bars, count);
         }
     }
 
@@ -142,9 +200,8 @@ impl App {
 
     /// Updates audio bars received from the FFT and applies smoothing.
     pub fn update_audio_bars(&mut self, bars: Vec<f32>) {
-        if self.audio_bars.len() != bars.len() {
-            self.audio_bars = bars.clone();
-            self.target_bars = bars;
+        // A frame computed for a previous bar count can still be in flight after a change.
+        if bars.len() != self.bar_count {
             return;
         }
 
@@ -190,22 +247,166 @@ impl App {
     }
 }
 
+/// Stretches `bars` to `len` entries by picking the nearest source bar for each new one.
+fn resample(bars: &[f32], len: usize) -> Vec<f32> {
+    if bars.is_empty() {
+        return vec![0.0; len];
+    }
+    (0..len).map(|i| bars[i * bars.len() / len]).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_app_increment_counter() {
+    fn app_with_width(width: u16) -> App {
         let mut app = App::default();
-        app.increment_counter();
-        assert_eq!(app.counter, 1);
+        app.set_terminal_width(width);
+        app
     }
 
     #[test]
-    fn test_app_decrement_counter() {
-        let mut app = App::default();
-        app.decrement_counter();
-        assert_eq!(app.counter, 0);
+    fn test_bar_count_starts_at_minimum() {
+        let app = app_with_width(200);
+        assert_eq!(app.bar_count, 32);
+        assert_eq!(app.audio_bars.len(), 32);
+    }
+
+    #[test]
+    fn test_bar_count_steps_by_eight_up_to_the_cap() {
+        let mut app = app_with_width(1000);
+        for expected in [40, 48, 56] {
+            app.increase_bar_count();
+            assert_eq!(app.bar_count, expected);
+            assert_eq!(app.audio_bars.len(), expected);
+            assert_eq!(app.target_bars.len(), expected);
+        }
+
+        for _ in 0..100 {
+            app.increase_bar_count();
+        }
+        assert_eq!(app.bar_count, MAX_BARS);
+    }
+
+    #[test]
+    fn test_bar_count_last_step_stops_at_what_fits() {
+        // 200 columns fit 100 bars: 32, 40, ..., 96, then 100 rather than 104.
+        let mut app = app_with_width(200);
+        for _ in 0..20 {
+            app.increase_bar_count();
+        }
+        assert_eq!(app.bar_count, 100);
+        assert_eq!(app.max_bar_count(), 100);
+
+        app.decrease_bar_count();
+        assert_eq!(app.bar_count, 92);
+    }
+
+    #[test]
+    fn test_bar_count_never_goes_below_minimum() {
+        let mut app = app_with_width(200);
+        app.decrease_bar_count();
+        assert_eq!(app.bar_count, MIN_BARS);
+    }
+
+    #[test]
+    fn test_bar_count_is_minimum_on_a_too_narrow_terminal() {
+        let mut app = app_with_width(40);
+        app.increase_bar_count();
+        assert_eq!(app.bar_count, MIN_BARS);
+        assert_eq!(app.max_bar_count(), MIN_BARS);
+    }
+
+    #[test]
+    fn test_bar_count_shrinks_with_terminal_and_grows_back() {
+        let mut app = app_with_width(400);
+        for _ in 0..8 {
+            app.increase_bar_count();
+        }
+        assert_eq!(app.bar_count, 96);
+
+        app.set_terminal_width(120);
+        assert_eq!(app.bar_count, 60);
+        assert_eq!(app.audio_bars.len(), 60);
+
+        app.set_terminal_width(400);
+        assert_eq!(app.bar_count, 96);
+        assert_eq!(app.audio_bars.len(), 96);
+    }
+
+    #[test]
+    fn test_pressing_against_the_cap_keeps_the_chosen_count() {
+        let mut app = app_with_width(400);
+        for _ in 0..8 {
+            app.increase_bar_count();
+        }
+        app.set_terminal_width(120);
+
+        // 60 is the cap here; pressing → must not forget the 96 that was chosen.
+        app.increase_bar_count();
+        app.set_terminal_width(400);
+
+        assert_eq!(app.bar_count, 96);
+    }
+
+    #[test]
+    fn test_decreasing_from_a_capped_count_starts_from_what_is_shown() {
+        let mut app = app_with_width(400);
+        for _ in 0..8 {
+            app.increase_bar_count();
+        }
+        app.set_terminal_width(120);
+
+        app.decrease_bar_count();
+
+        assert_eq!(app.bar_count, 52);
+        app.set_terminal_width(400);
+        assert_eq!(app.bar_count, 52);
+    }
+
+    #[test]
+    fn test_changing_bar_count_stretches_current_bars() {
+        let mut app = app_with_width(200);
+        app.audio_bars = vec![0.5; 32];
+        app.target_bars = vec![0.5; 32];
+
+        app.increase_bar_count();
+
+        assert_eq!(app.audio_bars, vec![0.5; 40]);
+        assert_eq!(app.target_bars, vec![0.5; 40]);
+    }
+
+    #[test]
+    fn test_stale_audio_frames_are_ignored_after_a_change() {
+        let mut app = app_with_width(200);
+        app.increase_bar_count();
+
+        app.update_audio_bars(vec![1.0; 32]);
+
+        assert_eq!(app.target_bars, vec![0.0; 40]);
+        app.update_audio_bars(vec![1.0; 40]);
+        assert_eq!(app.target_bars, vec![1.0; 40]);
+    }
+
+    #[test]
+    fn test_bar_notice_shows_after_a_change_then_expires() {
+        let mut app = app_with_width(200);
+        assert_eq!(app.bar_notice(), None);
+
+        app.increase_bar_count();
+        assert_eq!(app.bar_notice(), Some(40));
+
+        for _ in 0..BAR_NOTICE_TICKS {
+            app.tick();
+        }
+        assert_eq!(app.bar_notice(), None);
+    }
+
+    #[test]
+    fn test_bar_notice_also_shows_when_already_at_a_limit() {
+        let mut app = app_with_width(200);
+        app.decrease_bar_count();
+        assert_eq!(app.bar_notice(), Some(MIN_BARS));
     }
 
     #[test]

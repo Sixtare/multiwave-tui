@@ -1,5 +1,9 @@
 use std::{
-    sync::mpsc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
@@ -14,6 +18,8 @@ use crate::event::Event;
 
 const DEFAULT_DEVICE_KEY: &str = "__default_output__";
 const DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+/// FFT block size used for every capture stream; the bar count can't exceed half of it.
+const FFT_SIZE: usize = 1024;
 
 struct DeviceEntry {
     name: String,
@@ -54,6 +60,9 @@ pub struct SoundDevice {
     _stream: Option<Stream>,
     default_key: Option<String>,
     last_device_check: Instant,
+    /// Number of bars the capture callback produces; shared so it can change without rebuilding
+    /// the stream.
+    bar_count: Arc<AtomicUsize>,
 }
 
 impl SoundDevice {
@@ -195,7 +204,7 @@ impl SoundDevice {
     }
 
     /// Initializes and detects output audio devices.
-    pub fn new() -> Result<Self> {
+    pub fn new(num_bars: usize) -> Result<Self> {
         let list = Self::enumerate_output_devices();
         let name = list
             .entries
@@ -212,17 +221,19 @@ impl SoundDevice {
             _stream: None,
             default_key: list.default_key,
             last_device_check: Instant::now(),
+            bar_count: Arc::new(AtomicUsize::new(num_bars.clamp(1, FFT_SIZE / 2))),
         })
     }
 
+    /// Changes how many bars the running capture produces, effective from the next audio chunk.
+    pub fn set_num_bars(&self, num_bars: usize) {
+        self.bar_count
+            .store(num_bars.clamp(1, FFT_SIZE / 2), Ordering::Relaxed);
+    }
+
     /// Starts audio capture on the currently active device.
-    pub fn start_capture(
-        &mut self,
-        sender: mpsc::Sender<Event>,
-        num_bars: usize,
-        gain: f32,
-    ) -> Result<()> {
-        self.switch_device(self.active_idx, sender, num_bars, gain)
+    pub fn start_capture(&mut self, sender: mpsc::Sender<Event>, gain: f32) -> Result<()> {
+        self.switch_device(self.active_idx, sender, gain)
     }
 
     /// Switches the capture stream to the device at the specified index.
@@ -230,7 +241,6 @@ impl SoundDevice {
         &mut self,
         index: usize,
         sender: mpsc::Sender<Event>,
-        num_bars: usize,
         gain: f32,
     ) -> Result<()> {
         Self::init_capture_env();
@@ -254,55 +264,113 @@ impl SoundDevice {
         );
 
         let channels = config.channels as usize;
-        let fft_size = 1024;
-        let processor = AudioProcessor::new(channels, config.sample_rate, fft_size, num_bars, gain);
+        let bar_count = Arc::clone(&self.bar_count);
+        let processor = AudioProcessor::new(
+            channels,
+            config.sample_rate,
+            FFT_SIZE,
+            bar_count.load(Ordering::Relaxed),
+            gain,
+        );
 
         let error_sender = sender.clone();
         let stream = match sample_format {
-            SampleFormat::I8 => {
-                build_capture_stream::<i8>(&device, &config, processor, sender, error_sender)?
-            }
-            SampleFormat::I16 => {
-                build_capture_stream::<i16>(&device, &config, processor, sender, error_sender)?
-            }
+            SampleFormat::I8 => build_capture_stream::<i8>(
+                &device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                bar_count.clone(),
+            )?,
+            SampleFormat::I16 => build_capture_stream::<i16>(
+                &device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                bar_count.clone(),
+            )?,
             SampleFormat::I24 => build_capture_stream::<cpal::I24>(
                 &device,
                 &config,
                 processor,
                 sender,
                 error_sender,
+                bar_count.clone(),
             )?,
-            SampleFormat::I32 => {
-                build_capture_stream::<i32>(&device, &config, processor, sender, error_sender)?
-            }
-            SampleFormat::I64 => {
-                build_capture_stream::<i64>(&device, &config, processor, sender, error_sender)?
-            }
-            SampleFormat::U8 => {
-                build_capture_stream::<u8>(&device, &config, processor, sender, error_sender)?
-            }
-            SampleFormat::U16 => {
-                build_capture_stream::<u16>(&device, &config, processor, sender, error_sender)?
-            }
+            SampleFormat::I32 => build_capture_stream::<i32>(
+                &device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                bar_count.clone(),
+            )?,
+            SampleFormat::I64 => build_capture_stream::<i64>(
+                &device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                bar_count.clone(),
+            )?,
+            SampleFormat::U8 => build_capture_stream::<u8>(
+                &device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                bar_count.clone(),
+            )?,
+            SampleFormat::U16 => build_capture_stream::<u16>(
+                &device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                bar_count.clone(),
+            )?,
             SampleFormat::U24 => build_capture_stream::<cpal::U24>(
                 &device,
                 &config,
                 processor,
                 sender,
                 error_sender,
+                bar_count.clone(),
             )?,
-            SampleFormat::U32 => {
-                build_capture_stream::<u32>(&device, &config, processor, sender, error_sender)?
-            }
-            SampleFormat::U64 => {
-                build_capture_stream::<u64>(&device, &config, processor, sender, error_sender)?
-            }
-            SampleFormat::F32 => {
-                build_capture_stream::<f32>(&device, &config, processor, sender, error_sender)?
-            }
-            SampleFormat::F64 => {
-                build_capture_stream::<f64>(&device, &config, processor, sender, error_sender)?
-            }
+            SampleFormat::U32 => build_capture_stream::<u32>(
+                &device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                bar_count.clone(),
+            )?,
+            SampleFormat::U64 => build_capture_stream::<u64>(
+                &device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                bar_count.clone(),
+            )?,
+            SampleFormat::F32 => build_capture_stream::<f32>(
+                &device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                bar_count.clone(),
+            )?,
+            SampleFormat::F64 => build_capture_stream::<f64>(
+                &device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                bar_count.clone(),
+            )?,
             sample_fmt => {
                 return Err(color_eyre::eyre::eyre!(
                     "Unsupported sample format: {:?}",
@@ -334,7 +402,6 @@ impl SoundDevice {
         &mut self,
         selected_idx: usize,
         sender: &mpsc::Sender<Event>,
-        num_bars: usize,
         gain: f32,
     ) -> Option<DeviceListUpdate> {
         if self.last_device_check.elapsed() < DEVICE_CHECK_INTERVAL {
@@ -347,7 +414,7 @@ impl SoundDevice {
             return None;
         }
 
-        let update = self.refresh_devices(selected_idx, sender, num_bars, gain, false);
+        let update = self.refresh_devices(selected_idx, sender, gain, false);
         update.changed.then_some(update)
     }
 
@@ -356,11 +423,10 @@ impl SoundDevice {
         &mut self,
         selected_idx: usize,
         sender: &mpsc::Sender<Event>,
-        num_bars: usize,
         gain: f32,
     ) -> DeviceListUpdate {
         self.last_device_check = Instant::now();
-        self.refresh_devices(selected_idx, sender, num_bars, gain, true)
+        self.refresh_devices(selected_idx, sender, gain, true)
     }
 
     fn current_default_key() -> Option<String> {
@@ -378,7 +444,6 @@ impl SoundDevice {
         &mut self,
         selected_idx: usize,
         sender: &mpsc::Sender<Event>,
-        num_bars: usize,
         gain: f32,
         force_rebuild: bool,
     ) -> DeviceListUpdate {
@@ -440,7 +505,7 @@ impl SoundDevice {
                 self.active_idx = 0;
                 message = Some("No audio output devices available".to_string());
             } else {
-                match self.switch_device(new_active_idx, sender.clone(), num_bars, gain) {
+                match self.switch_device(new_active_idx, sender.clone(), gain) {
                     Ok(()) => {
                         if active_lost {
                             message = Some(
@@ -557,6 +622,7 @@ fn build_capture_stream<T>(
     processor: AudioProcessor,
     sender: mpsc::Sender<Event>,
     error_sender: mpsc::Sender<Event>,
+    bar_count: Arc<AtomicUsize>,
 ) -> Result<Stream, cpal::BuildStreamError>
 where
     T: SizedSample,
@@ -568,6 +634,7 @@ where
     device.build_input_stream(
         config,
         move |data: &[T], _: &cpal::InputCallbackInfo| {
+            processor.set_num_bars(bar_count.load(Ordering::Relaxed));
             scratch.clear();
             scratch.extend(data.iter().map(|&sample| f32::from_sample(sample)));
 

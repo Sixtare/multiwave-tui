@@ -63,6 +63,8 @@ pub struct EventBatch {
     pub ticks: u32,
     /// Most recent audio bars; older frames in the same batch are superseded.
     pub latest_bars: Option<Vec<f32>>,
+    /// Terminal width after the last resize in the batch.
+    pub latest_width: Option<u16>,
     /// Events that must be handled individually, in arrival order.
     pub events: Vec<BatchEvent>,
 }
@@ -84,8 +86,9 @@ impl EventBatch {
         match event {
             Event::Tick => self.ticks += 1,
             Event::AudioBars(bars) => self.latest_bars = Some(bars),
-            // Mouse input is unused and ratatui picks up the new size on the next draw.
-            Event::Mouse(_) | Event::Resize(_, _) => {}
+            Event::Resize(width, _) => self.latest_width = Some(width),
+            // Mouse input is unused.
+            Event::Mouse(_) => {}
             Event::Key(key_event) => self.events.push(BatchEvent::Key(key_event)),
             Event::AudioError(message) => self.events.push(BatchEvent::AudioError(message)),
             Event::AudioDeviceLost => self.events.push(BatchEvent::AudioDeviceLost),
@@ -265,6 +268,7 @@ mod tests {
 
         assert!(!batch.has_tick());
         assert_eq!(batch.latest_bars, Some(vec![0.5]));
+        assert_eq!(batch.latest_width, Some(80));
         assert!(batch.events.is_empty());
     }
 

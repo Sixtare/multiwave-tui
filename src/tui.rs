@@ -84,6 +84,11 @@ impl Tui {
         Ok(())
     }
 
+    /// Current terminal width in columns.
+    pub fn width(&self) -> Result<u16> {
+        Ok(self.terminal.size()?.width)
+    }
+
     /// Draws the app unless the frame would be identical to the last one drawn.
     ///
     /// Even an unchanged frame costs a full buffer rebuild and diff, which at 60 FPS is most of
