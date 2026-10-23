@@ -319,21 +319,20 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(lines), inner);
 
     if let Some(cursor) = app.color_picker {
-        render_color_list(frame, popup_area, app.color_row as u16, cursor);
+        render_color_list(frame, popup_area, cursor);
     }
 }
 
 /// Draws the list of pickable colors to the right of `popup_area`, or over its right edge when
-/// the terminal has no room beside it. `row` is the popup row being edited.
-fn render_color_list(frame: &mut Frame, popup_area: Rect, row: u16, cursor: usize) {
+/// the terminal has no room beside it.
+fn render_color_list(frame: &mut Frame, popup_area: Rect, cursor: usize) {
     let area = frame.area();
     let width = 20.min(area.width);
     let colors = BarColor::ALL;
     let height = (colors.len() as u16 + 2).min(area.height);
-    // Lined up with the edited row, but kept inside the terminal.
-    let y = (popup_area.y + 1 + row)
-        .saturating_sub(1)
-        .min(area.y + area.height - height);
+    // Centered on the same horizontal axis as the popup, but kept inside the terminal.
+    let centered_y = (popup_area.y + popup_area.height / 2).saturating_sub(height / 2);
+    let y = centered_y.min(area.y + area.height - height);
     let x = if popup_area.right() + width <= area.right() {
         popup_area.right()
     } else {
@@ -714,6 +713,16 @@ mod tests {
             .next()
             .expect("color list title");
         assert!(list_title_col > popup_col + 10);
+
+        // Both boxes share the same center row: compare their top and bottom corners.
+        let corner_rows = |x: u16| -> (u16, u16) {
+            let top = (0..20).find(|&y| buffer[(x, y)].symbol() == "╭").unwrap();
+            let bottom = (0..20).find(|&y| buffer[(x, y)].symbol() == "╰").unwrap();
+            (top, bottom)
+        };
+        let (popup_top, popup_bottom) = corner_rows(23);
+        let (list_top, list_bottom) = corner_rows(57);
+        assert_eq!(popup_top + popup_bottom, list_top + list_bottom);
         let all: String = (0..20).map(row).collect();
         assert!(all.contains("Gray"));
     }
