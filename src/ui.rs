@@ -307,6 +307,16 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
             let selected = row == app.color_row;
             let text_style = if grayed_out {
                 Style::default().fg(Color::DarkGray)
+            } else if row == Palette::MIRROR_ROW {
+                // The checkbox row shows its state: green when on, yellow when off. The cursor
+                // is shown by the `>` and bold text.
+                let state = if palette.mirror_dimmed {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                };
+                let style = Style::default().fg(state);
+                if selected { style.bold() } else { style }
             } else if selected {
                 Style::default().fg(Color::Cyan).bold()
             } else {
@@ -316,13 +326,7 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
                 Some(color) => color_value(color, text_style),
                 None if row == Palette::MIRROR_ROW => {
                     let mark = if palette.mirror_dimmed { "x" } else { " " };
-                    // An active option is shown in green.
-                    let style = if palette.mirror_dimmed {
-                        text_style.fg(Color::Green)
-                    } else {
-                        text_style
-                    };
-                    vec![Span::styled(format!("[{mark}] Darker"), style)]
+                    vec![Span::styled(format!("[{mark}] Darker"), text_style)]
                 }
                 None => vec![Span::styled(
                     if palette.single_mode {
@@ -889,18 +893,21 @@ mod tests {
             .map(|(x, y)| buffer[(x, y)].symbol().to_string())
             .collect();
         assert!(text.contains("[ ] Darker"));
-        let darker_color = |buffer: &Buffer| {
+        let color_of = |buffer: &Buffer, word: &str| {
             let line = |y: u16| -> String { (0..80).map(|x| buffer[(x, y)].symbol()).collect() };
-            let row = (0..24).find(|&y| line(y).contains("Darker")).unwrap();
-            let x = line(row).split("Darker").next().unwrap().chars().count() as u16;
+            let row = (0..24).find(|&y| line(y).contains(word)).unwrap();
+            let x = line(row).split(word).next().unwrap().chars().count() as u16;
             buffer[(x, row)].fg
         };
-        // Off: the normal selected color. On: green.
-        assert_eq!(darker_color(buffer), Color::Cyan);
+        // Off: both the label and the checkbox are yellow. On: green.
+        assert_eq!(color_of(buffer, "Mirror"), Color::Yellow);
+        assert_eq!(color_of(buffer, "Darker"), Color::Yellow);
         app.activate_color_row();
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
-        assert_eq!(darker_color(terminal.backend().buffer()), Color::Green);
+        let on = terminal.backend().buffer();
+        assert_eq!(color_of(on, "Mirror"), Color::Green);
+        assert_eq!(color_of(on, "Darker"), Color::Green);
         app.activate_color_row();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
         // The leftmost mirror cell has the same color as the bar above the divider.
