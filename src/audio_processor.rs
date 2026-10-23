@@ -20,7 +20,7 @@ pub const MAX_BAR_COUNT: usize = FFT_SIZE / 2;
 
 /// Height scale: the top of a bar is 0 dB, the level of a full-scale sine and the bottom is `DB_WINDOW` dB below it. Bar height is
 /// linear in dB between the two.
-pub const DB_WINDOW: f32 = 60.0;
+pub const DB_WINDOW: f32 = 50.0;
 const FLOOR_DB: f32 = -DB_WINDOW;
 
 /// Pink noise falls 3 dB per octave, so each octave is boosted by this much to display it flat.
@@ -30,6 +30,10 @@ const PINK_SLOPE_DB_PER_OCT: f32 = 3.01;
 pub const EXTRA_SLOPE_DB_PER_OCT: f32 = 1.5;
 /// Frequency at which the tilt has no effect.
 const TILT_PIVOT_HZ: f32 = 1000.0;
+
+/// Height the automatic sensitivity holds the loudest bar at (1.0 is the top). The headroom above
+/// it is left for transients and for the manual sensitivity, so loud music doesn't fill the screen.
+const PEAK_TARGET_HEIGHT: f32 = 0.75;
 
 /// A frame whose loudest sample is below this (about -80 dBFS) counts as silence.
 const SILENCE_PEAK: f32 = 1e-4;
@@ -369,7 +373,7 @@ impl AudioProcessor {
 
             let level = magnitude * bar.gain() * self.sensitivity;
             let height = level_to_height(level);
-            overshoot |= height > 1.0;
+            overshoot |= height > PEAK_TARGET_HEIGHT;
             bars.push((height + manual_offset).clamp(0.0, 1.0));
         }
 
@@ -717,16 +721,16 @@ mod tests {
     }
 
     #[test]
-    fn test_loud_music_settles_with_its_peak_at_the_top() {
+    fn test_loud_music_settles_with_its_peak_at_the_target_height() {
         let mut processor = AudioProcessor::new(1, SAMPLE_RATE, 32);
         let frames = processor.process_interleaved_samples(&sine(10_000.0, 1.0, FFT_SIZE * 200));
 
         let last = frames.last().unwrap();
         let top = last.iter().cloned().fold(0.0, f32::max);
-        assert!(top > 0.9, "{top}");
-        // Settles where the loudest bar just touches the top (about -4.5 dB here).
+        assert!((0.65..0.85).contains(&top), "{top}");
+        // Settles where the loudest bar sits at the target height, leaving headroom above it.
         assert!(
-            (0.4..0.7).contains(&processor.sensitivity()),
+            (0.05..0.4).contains(&processor.sensitivity()),
             "{}",
             processor.sensitivity()
         );
@@ -735,7 +739,7 @@ mod tests {
     #[test]
     fn test_quiet_start_ramps_up_fast_but_not_beyond_the_limit() {
         let mut processor = AudioProcessor::new(1, SAMPLE_RATE, 32);
-        let quiet = pink_noise(FFT_SIZE * 60, 0.001);
+        let quiet = pink_noise(FFT_SIZE * 60, 0.003);
 
         let frames = processor.process_interleaved_samples(&quiet);
 
@@ -801,7 +805,7 @@ mod tests {
 
     #[test]
     fn test_manual_gain_shifts_levels_by_its_decibels() {
-        let samples = pink_noise(SAMPLE_RATE as usize * 4, 0.05);
+        let samples = pink_noise(SAMPLE_RATE as usize * 4, 0.2);
         let base = mean_levels_db(&mut processor_without_agc(32, 0.0), &samples);
 
         let mut boosted = processor_without_agc(32, 0.0);
