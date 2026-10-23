@@ -119,9 +119,12 @@ impl Default for Palette {
 }
 
 impl Palette {
+    /// Most rows the picker ever shows (gradient mode).
+    pub const MAX_ROWS: usize = 4;
+
     /// Number of rows the picker shows: the mode row plus one per editable color.
     pub fn row_count(&self) -> usize {
-        if self.single_mode { 2 } else { 4 }
+        if self.single_mode { 2 } else { Self::MAX_ROWS }
     }
 
     /// The color a picker row edits (row 0 is the mode and has none).

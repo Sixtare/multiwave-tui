@@ -264,7 +264,8 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
 fn render_color_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let palette = &app.palette;
-    let height = (palette.row_count() as u16 + 2).min(area.height);
+    // Same size in both modes, so the box does not jump when the mode changes.
+    let height = (Palette::MAX_ROWS as u16 + 2).min(area.height);
     let popup_area = area.centered(
         Constraint::Length(34.min(area.width)),
         Constraint::Length(height),
@@ -725,6 +726,24 @@ mod tests {
         assert_eq!(popup_top + popup_bottom, list_top + list_bottom);
         let all: String = (0..20).map(row).collect();
         assert!(all.contains("Gray"));
+    }
+
+    #[test]
+    fn test_color_popup_keeps_its_size_in_single_color_mode() {
+        let height_of = |app: &mut App| {
+            let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+            terminal.draw(|frame| render(app, frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let top = (0..20).find(|&y| buffer[(23, y)].symbol() == "╭").unwrap();
+            let bottom = (0..20).find(|&y| buffer[(23, y)].symbol() == "╰").unwrap();
+            bottom - top
+        };
+        let mut app = App::new();
+        app.open_color_popup();
+        let gradient = height_of(&mut app);
+        app.activate_color_row();
+        assert!(app.palette.single_mode);
+        assert_eq!(height_of(&mut app), gradient);
     }
 
     #[test]
