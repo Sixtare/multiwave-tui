@@ -328,14 +328,7 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
                     let mark = if palette.mirror_dimmed { "x" } else { " " };
                     vec![Span::styled(format!("[{mark}] Darker"), text_style)]
                 }
-                None => vec![Span::styled(
-                    if palette.single_mode {
-                        "Single color"
-                    } else {
-                        "Gradient"
-                    },
-                    text_style,
-                )],
+                None => vec![Span::styled(palette.mode.label(), text_style)],
             };
             let mut spans = vec![Span::styled(
                 format!("{} {:<7}", if selected { ">" } else { " " }, label),
@@ -486,17 +479,6 @@ fn bar_glyph(amplitude: f32, threshold: f32, rows: usize, glyphs: &[char]) -> ch
     }
 }
 
-/// Picks one of three colors by which third of the spectrum the bar belongs to.
-fn band_color(bar: usize, bar_count: usize, [bass, mids, treble]: [Color; 3]) -> Color {
-    if bar < bar_count / 3 {
-        bass
-    } else if bar < (bar_count * 2) / 3 {
-        mids
-    } else {
-        treble
-    }
-}
-
 /// Mirrored spectrum: bars grow upward from a center divider and are reflected below it.
 ///
 /// Writes cells straight into the buffer. Building a `Paragraph` of styled spans meant one
@@ -538,12 +520,10 @@ impl Widget for Soundwave<'_> {
             }
         };
 
-        let band_colors = self.palette.colors();
-        let mirror_band_colors = self.palette.mirror_colors();
         for (i, &amplitude) in self.bars.iter().enumerate() {
-            let color = band_color(i, bar_count, band_colors);
+            let color = self.palette.bar_color(i, bar_count).color();
             // Mirror reflection colors: softer/darker tones for depth effect
-            let mirror_color = band_color(i, bar_count, mirror_band_colors);
+            let mirror_color = self.palette.mirror_bar_color(i, bar_count);
             let normalized = amplitude.clamp(0.0, 1.0);
             // Slight reflection attenuation for a more realistic mirror/water effect
             let mirror_amplitude = (amplitude * 0.85).clamp(0.0, 1.0);
@@ -585,14 +565,19 @@ pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32], palette: &Pal
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette::ColorMode;
     use ratatui::{Terminal, backend::TestBackend};
 
     const SIZE: Size = Size::new(80, 24);
 
     fn render_bars(bars: &[f32], width: u16, height: u16) -> Buffer {
+        render_bars_with(bars, width, height, &Palette::default())
+    }
+
+    fn render_bars_with(bars: &[f32], width: u16, height: u16, palette: &Palette) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|frame| draw_soundwave(frame, frame.area(), bars, &Palette::default()))
+            .draw(|frame| draw_soundwave(frame, frame.area(), bars, palette))
             .unwrap();
         terminal.backend().buffer().clone()
     }
@@ -763,6 +748,7 @@ mod tests {
         let mut app = App::new();
         app.open_color_popup();
         app.activate_color_row();
+        app.activate_color_row();
         app.update_audio_bars(vec![1.0; 32]);
         app.tick();
 
@@ -857,8 +843,7 @@ mod tests {
         let mut app = App::new();
         app.open_color_popup();
         let (gradient_height, _, _) = render_popup_rows(&mut app);
-        app.activate_color_row();
-        assert!(app.palette.single_mode);
+        app.palette.mode = ColorMode::Single;
         let (height, top, buffer) = render_popup_rows(&mut app);
         assert_eq!(height, gradient_height);
 
@@ -937,6 +922,7 @@ mod tests {
         let mut app = App::new();
         app.open_color_popup();
         app.activate_color_row();
+        app.activate_color_row();
         app.close_color_popup();
 
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
@@ -949,6 +935,31 @@ mod tests {
             FrameState::capture(&app, SIZE).color_notice.as_deref(),
             Some("#00FFFF")
         );
+    }
+
+    #[test]
+    fn test_gradient_mode_blends_the_colors_across_the_bars() {
+        let mut app = App::new();
+        app.palette.mode = ColorMode::Gradient;
+        let buffer = render_bars_with(&[1.0; 32], 64, 7, &app.palette);
+
+        // Bars are two columns wide: first is the bass color, last the treble color, and no two
+        // neighbouring bars share a color.
+        assert_eq!(buffer[(0, 0)].fg, Color::Rgb(0, 255, 255));
+        assert_eq!(buffer[(62, 0)].fg, Color::Rgb(255, 0, 255));
+        let colors: Vec<Color> = (0..32).map(|bar| buffer[(bar * 2, 0)].fg).collect();
+        assert!(colors.windows(2).all(|pair| pair[0] != pair[1]));
+        // The mirror is the same blend, darker.
+        assert_eq!(buffer[(0, 4)].fg, Color::Rgb(0, 128, 128));
+        assert_ne!(buffer[(20, 4)].fg, buffer[(22, 4)].fg);
+    }
+
+    #[test]
+    fn test_frame_state_changes_with_the_color_mode() {
+        let mut app = App::new();
+        let before = FrameState::capture(&app, SIZE);
+        app.palette.mode = ColorMode::Gradient;
+        assert_ne!(before, FrameState::capture(&app, SIZE));
     }
 
     #[test]

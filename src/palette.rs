@@ -31,6 +31,18 @@ impl BarColor {
         Color::Rgb(dim(self.r), dim(self.g), dim(self.b))
     }
 
+    /// The color `t` (0 to 1) of the way from `self` to `other`, blended in RGB.
+    pub fn lerp(self, other: BarColor, t: f32) -> BarColor {
+        let t = t.clamp(0.0, 1.0);
+        let channel =
+            |from: u8, to: u8| (from as f32 + (to as f32 - from as f32) * t).round() as u8;
+        BarColor::rgb(
+            channel(self.r, other.r),
+            channel(self.g, other.g),
+            channel(self.b, other.b),
+        )
+    }
+
     /// `#RRGGBB`.
     pub fn hex(self) -> String {
         format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
@@ -87,12 +99,41 @@ impl BarColor {
     }
 }
 
-/// How the bars are colored: one color per third of the spectrum, or the bass color throughout.
+/// How the bars take their colors from the bass, mids and treble colors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorMode {
+    /// One flat color per third of the spectrum.
+    Bands,
+    /// A smooth blend: bass at the left end, mids in the middle and treble at the right end.
+    Gradient,
+    /// The bass color on every bar.
+    Single,
+}
+
+impl ColorMode {
+    /// The mode after this one in the picker's order.
+    pub fn next(self) -> ColorMode {
+        match self {
+            ColorMode::Bands => ColorMode::Gradient,
+            ColorMode::Gradient => ColorMode::Single,
+            ColorMode::Single => ColorMode::Bands,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ColorMode::Bands => "Bands",
+            ColorMode::Gradient => "Gradient",
+            ColorMode::Single => "Single color",
+        }
+    }
+}
+
+/// How the bars are colored: by bands, by a smooth gradient or with the bass color throughout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Palette {
-    /// Whether the mids and treble follow the bass color instead of using their own.
-    pub single_mode: bool,
-    /// Colors of the bass, mids and treble thirds. The mids and treble colors are kept while
+    pub mode: ColorMode,
+    /// Colors of the bass, mids and treble. The mids and treble colors are kept while
     /// single-color mode hides them.
     pub bands: [BarColor; 3],
     /// Whether the mirror reflection is a darker tone of the bar colors. Off, it uses the same
@@ -103,7 +144,7 @@ pub struct Palette {
 impl Default for Palette {
     fn default() -> Self {
         Self {
-            single_mode: false,
+            mode: ColorMode::Bands,
             bands: [BarColor::CYAN, BarColor::GREEN, BarColor::MAGENTA],
             mirror_dimmed: true,
         }
@@ -119,7 +160,7 @@ impl Palette {
     /// Whether the cursor can rest on `row`. In single-color mode the mids and treble are grayed
     /// out.
     pub fn row_selectable(&self, row: usize) -> bool {
-        row < Self::ROWS && !(self.single_mode && (2..=3).contains(&row))
+        row < Self::ROWS && !(self.mode == ColorMode::Single && (2..=3).contains(&row))
     }
 
     /// The next selectable row after `row`, wrapping around.
@@ -147,18 +188,18 @@ impl Palette {
         }
     }
 
-    /// The color a band is drawn with.
+    /// The color a band is shown with in the picker.
     fn band_color(&self, band: usize) -> BarColor {
-        if self.single_mode {
+        if self.mode == ColorMode::Single {
             self.bands[0]
         } else {
             self.bands[band]
         }
     }
 
-    /// Flips between gradient and single-color mode.
-    pub fn toggle_mode(&mut self) {
-        self.single_mode = !self.single_mode;
+    /// Switches to the next color mode: bands, gradient, single color.
+    pub fn next_mode(&mut self) {
+        self.mode = self.mode.next();
     }
 
     /// Turns the darker mirror tone on or off.
@@ -173,25 +214,52 @@ impl Palette {
         }
     }
 
-    /// The colors of the bass, mids and treble thirds.
-    pub fn colors(&self) -> [Color; 3] {
-        [0, 1, 2].map(|band| self.band_color(band).color())
+    /// The color of bar `bar` out of `bar_count`.
+    pub fn bar_color(&self, bar: usize, bar_count: usize) -> BarColor {
+        let [bass, mids, treble] = self.bands;
+        match self.mode {
+            ColorMode::Single => bass,
+            ColorMode::Bands => {
+                if bar < bar_count / 3 {
+                    bass
+                } else if bar < (bar_count * 2) / 3 {
+                    mids
+                } else {
+                    treble
+                }
+            }
+            ColorMode::Gradient => {
+                // Bass at the first bar, mids at the middle one and treble at the last.
+                let t = if bar_count > 1 {
+                    bar as f32 / (bar_count - 1) as f32
+                } else {
+                    0.0
+                };
+                if t <= 0.5 {
+                    bass.lerp(mids, t * 2.0)
+                } else {
+                    mids.lerp(treble, (t - 0.5) * 2.0)
+                }
+            }
+        }
     }
 
-    /// The mirror tones (darker unless the mirror is not dimmed) of the bass, mids and treble thirds.
-    pub fn mirror_colors(&self) -> [Color; 3] {
-        if !self.mirror_dimmed {
-            return self.colors();
+    /// The color of bar `bar`'s reflection: a darker tone of its color unless the mirror is not
+    /// dimmed.
+    pub fn mirror_bar_color(&self, bar: usize, bar_count: usize) -> Color {
+        let color = self.bar_color(bar, bar_count);
+        if self.mirror_dimmed {
+            color.mirror_color()
+        } else {
+            color.color()
         }
-        [0, 1, 2].map(|band| self.band_color(band).mirror_color())
     }
 
     /// Short description for the on-screen notice.
     pub fn describe(&self) -> String {
-        if self.single_mode {
-            self.bands[0].hex()
-        } else {
-            "Gradient".to_string()
+        match self.mode {
+            ColorMode::Single => self.bands[0].hex(),
+            mode => mode.label().to_string(),
         }
     }
 }
@@ -201,13 +269,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_keeps_cyan_green_magenta() {
+    fn test_default_keeps_the_cyan_green_magenta_bands() {
+        let palette = Palette::default();
+        assert_eq!(palette.mode, ColorMode::Bands);
+        let colors: Vec<BarColor> = [0, 9, 10, 20, 21, 31]
+            .iter()
+            .map(|&bar| palette.bar_color(bar, 32))
+            .collect();
         assert_eq!(
-            Palette::default().colors(),
+            colors,
             [
-                Color::Rgb(0, 255, 255),
-                Color::Rgb(0, 205, 0),
-                Color::Rgb(255, 0, 255)
+                BarColor::CYAN,
+                BarColor::CYAN,
+                BarColor::GREEN,
+                BarColor::GREEN,
+                BarColor::MAGENTA,
+                BarColor::MAGENTA
             ]
         );
     }
@@ -272,10 +349,22 @@ mod tests {
     }
 
     #[test]
-    fn test_single_mode_makes_mids_and_treble_follow_the_bass() {
+    fn test_mode_cycles_bands_gradient_single() {
         let mut palette = Palette::default();
-        palette.toggle_mode();
-        assert!(palette.single_mode);
+        palette.next_mode();
+        assert_eq!(palette.mode, ColorMode::Gradient);
+        palette.next_mode();
+        assert_eq!(palette.mode, ColorMode::Single);
+        palette.next_mode();
+        assert_eq!(palette.mode, ColorMode::Bands);
+    }
+
+    #[test]
+    fn test_single_mode_makes_mids_and_treble_follow_the_bass() {
+        let mut palette = Palette {
+            mode: ColorMode::Single,
+            ..Palette::default()
+        };
         assert!(!palette.row_selectable(2));
         assert!(!palette.row_selectable(3));
         assert_eq!(palette.row_color(3), Some(BarColor::CYAN));
@@ -284,14 +373,74 @@ mod tests {
         palette.set_row_color(1, custom);
         // Mids and treble cannot be edited while they follow the bass.
         palette.set_row_color(2, BarColor::rgb(255, 0, 0));
-        assert_eq!(palette.colors(), [custom.color(); 3]);
-        assert_eq!(palette.mirror_colors(), [custom.mirror_color(); 3]);
+        for bar in [0, 15, 31] {
+            assert_eq!(palette.bar_color(bar, 32), custom);
+            assert_eq!(palette.mirror_bar_color(bar, 32), custom.mirror_color());
+        }
         assert_eq!(palette.describe(), "#0A141E");
 
-        // Going back to the gradient brings back the mids and treble colors.
-        palette.toggle_mode();
+        // The mids and treble colors come back with the other modes.
+        palette.mode = ColorMode::Bands;
         assert!(palette.row_selectable(2));
         assert_eq!(palette.bands, [custom, BarColor::GREEN, BarColor::MAGENTA]);
+    }
+
+    #[test]
+    fn test_gradient_blends_from_bass_through_mids_to_treble() {
+        let palette = Palette {
+            mode: ColorMode::Gradient,
+            bands: [
+                BarColor::rgb(0, 0, 0),
+                BarColor::rgb(200, 100, 0),
+                BarColor::rgb(200, 100, 200),
+            ],
+            ..Palette::default()
+        };
+
+        assert_eq!(palette.bar_color(0, 33), palette.bands[0]);
+        assert_eq!(palette.bar_color(16, 33), palette.bands[1]);
+        assert_eq!(palette.bar_color(32, 33), palette.bands[2]);
+        // A quarter and three quarters of the way: halfway between the neighbouring colors.
+        assert_eq!(palette.bar_color(8, 33), BarColor::rgb(100, 50, 0));
+        assert_eq!(palette.bar_color(24, 33), BarColor::rgb(200, 100, 100));
+        assert_eq!(palette.describe(), "Gradient");
+    }
+
+    #[test]
+    fn test_gradient_changes_smoothly_bar_to_bar() {
+        let palette = Palette {
+            mode: ColorMode::Gradient,
+            ..Palette::default()
+        };
+        let colors: Vec<BarColor> = (0..64).map(|bar| palette.bar_color(bar, 64)).collect();
+
+        // No jump between neighbours, unlike the flat bands, and every bar differs from the next.
+        for pair in colors.windows(2) {
+            assert_ne!(pair[0], pair[1]);
+            let jump = |a: u8, b: u8| a.abs_diff(b);
+            assert!(jump(pair[0].r, pair[1].r) < 20, "{pair:?}");
+            assert!(jump(pair[0].g, pair[1].g) < 20, "{pair:?}");
+            assert!(jump(pair[0].b, pair[1].b) < 20, "{pair:?}");
+        }
+    }
+
+    #[test]
+    fn test_gradient_with_one_bar_uses_the_bass_color() {
+        let palette = Palette {
+            mode: ColorMode::Gradient,
+            ..Palette::default()
+        };
+        assert_eq!(palette.bar_color(0, 1), BarColor::CYAN);
+    }
+
+    #[test]
+    fn test_lerp_blends_and_clamps() {
+        let black = BarColor::rgb(0, 0, 0);
+        let white = BarColor::rgb(255, 255, 255);
+        assert_eq!(black.lerp(white, 0.0), black);
+        assert_eq!(black.lerp(white, 1.0), white);
+        assert_eq!(black.lerp(white, 0.5), BarColor::rgb(128, 128, 128));
+        assert_eq!(black.lerp(white, 2.0), white);
     }
 
     #[test]
@@ -299,7 +448,7 @@ mod tests {
         let mut palette = Palette::default();
         assert_eq!(palette.next_row(3, true), 4);
         assert_eq!(palette.next_row(4, true), 0);
-        palette.toggle_mode();
+        palette.mode = ColorMode::Single;
         assert_eq!(palette.next_row(1, true), 4);
         assert_eq!(palette.next_row(4, false), 1);
         assert_eq!(palette.next_row(0, false), 4);
@@ -308,11 +457,14 @@ mod tests {
     #[test]
     fn test_mirror_without_dimming_uses_the_bar_colors() {
         let mut palette = Palette::default();
-        assert_ne!(palette.mirror_colors(), palette.colors());
-        palette.toggle_mirror_dimmed();
-        assert_eq!(palette.mirror_colors(), palette.colors());
-        palette.toggle_mode();
-        assert_eq!(palette.mirror_colors(), [BarColor::CYAN.color(); 3]);
+        for mode in [ColorMode::Bands, ColorMode::Gradient, ColorMode::Single] {
+            palette.mode = mode;
+            palette.mirror_dimmed = true;
+            let bar = palette.bar_color(5, 32);
+            assert_eq!(palette.mirror_bar_color(5, 32), bar.mirror_color());
+            palette.toggle_mirror_dimmed();
+            assert_eq!(palette.mirror_bar_color(5, 32), bar.color());
+        }
         // The checkbox row never edits a band.
         palette.set_row_color(Palette::MIRROR_ROW, BarColor::rgb(255, 0, 0));
         assert_eq!(palette.bands[0], BarColor::CYAN);

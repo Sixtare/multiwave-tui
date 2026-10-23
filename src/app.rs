@@ -335,7 +335,7 @@ impl App {
     /// picker for a color row.
     pub fn activate_color_row(&mut self) {
         match self.color_row {
-            0 => self.palette.toggle_mode(),
+            0 => self.palette.next_mode(),
             Palette::MIRROR_ROW => self.palette.toggle_mirror_dimmed(),
             _ => {
                 if let Some(color) = self.palette.row_color(self.color_row) {
@@ -390,6 +390,7 @@ fn resample(bars: &[f32], len: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette::ColorMode;
 
     fn app_with_width(width: u16) -> App {
         let mut app = App::default();
@@ -435,7 +436,7 @@ mod tests {
         assert_eq!(app.color_notice(), None);
 
         app.close_color_popup();
-        assert_eq!(app.color_notice().as_deref(), Some("Gradient"));
+        assert_eq!(app.color_notice().as_deref(), Some("Bands"));
         for _ in 0..90 {
             app.tick();
         }
@@ -459,7 +460,8 @@ mod tests {
         app.select_next_color_row();
         assert_eq!(app.color_row, 0);
         app.activate_color_row();
-        assert!(app.palette.single_mode);
+        app.activate_color_row();
+        assert_eq!(app.palette.mode, ColorMode::Single);
         assert_eq!(app.color_picker, None);
         app.select_prev_color_row();
         assert_eq!(app.color_row, 4);

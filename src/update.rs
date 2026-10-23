@@ -185,7 +185,11 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{color_picker::PickerFocus, event::Event, palette::BarColor};
+    use crate::{
+        color_picker::PickerFocus,
+        event::Event,
+        palette::{BarColor, ColorMode},
+    };
 
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
@@ -281,9 +285,11 @@ mod tests {
         assert!(!app.should_quit);
         assert_eq!(app.bar_count, 32);
 
-        // Enter on the mode row switches to single color.
+        // Enter on the mode row goes through gradient to single color.
         press(&mut app, KeyCode::Enter);
-        assert!(app.palette.single_mode);
+        assert_eq!(app.palette.mode, ColorMode::Gradient);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.palette.mode, ColorMode::Single);
         assert_eq!(app.color_picker, None);
     }
 
