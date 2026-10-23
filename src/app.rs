@@ -426,11 +426,12 @@ mod tests {
         app.activate_color_row();
         app.edit_color_picker(|picker| {
             picker.next_focus();
-            picker.next_focus();
-            "FF8000".chars().for_each(|ch| picker.type_char(ch));
+            picker.nudge(0, 10, false);
         });
+        let picked = app.color_picker.as_ref().unwrap().color();
+        assert_ne!(picked, BarColor::CYAN);
         app.close_color_picker(true);
-        assert_eq!(app.palette.bands[0], BarColor::rgb(255, 128, 0));
+        assert_eq!(app.palette.bands[0], picked);
         assert_eq!(app.color_notice(), None);
 
         app.close_color_popup();

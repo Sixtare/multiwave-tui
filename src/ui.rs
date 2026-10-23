@@ -350,8 +350,8 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
 }
 
 /// Draws the color picker to the right of `popup_area`, or over its right edge when the terminal
-/// has no room beside it: the saturation/value square, the hue strip beside it and the hex field
-/// below.
+/// has no room beside it: the saturation/value square, the hue strip beside it and the picked
+/// color's hex value below.
 fn render_color_picker(frame: &mut Frame, popup_area: Rect, picker: &ColorPicker) {
     let area = frame.area();
     let width = PICKER_WIDTH.min(area.width);
@@ -435,20 +435,10 @@ fn render_color_picker(frame: &mut Frame, popup_area: Rect, picker: &ColorPicker
         Color::Reset,
     );
 
-    // Hex field: a swatch of the picked color and its `#RRGGBB` value.
-    let hex_style = if focused(PickerFocus::Hex) {
-        Style::default().fg(Color::Cyan).bold()
-    } else {
-        Style::default().fg(Color::White)
-    };
-    let cursor = if focused(PickerFocus::Hex) && picker.hex.len() < 6 {
-        "_"
-    } else {
-        ""
-    };
+    // A swatch of the picked color and its `#RRGGBB` value, for reading only.
     let hex_line = Line::from(vec![
         Span::styled("████", Style::default().fg(picker.color().color())),
-        Span::styled(format!(" #{}{cursor}", picker.hex), hex_style),
+        Span::raw(format!(" {}", picker.color().hex())),
     ]);
     if inner.height > SQUARE_ROWS as u16 + 1 {
         let hex_area = Rect {
