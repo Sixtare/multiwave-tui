@@ -404,6 +404,7 @@ mod tests {
 
         assert_ne!(before, FrameState::capture(&app, Size::new(100, 24)));
         app.update_audio_bars(vec![0.5; 32]);
+        app.tick();
         assert_ne!(before, FrameState::capture(&app, SIZE));
     }
 
@@ -509,6 +510,8 @@ mod tests {
         let before = FrameState::capture(&app, SIZE);
 
         app.update_audio_bars(vec![0.5; 32]);
+
+        app.tick();
 
         assert_eq!(before, FrameState::capture(&app, SIZE));
     }
