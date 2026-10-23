@@ -7,6 +7,9 @@ pub mod audio_processor;
 /// Terminal events handler.
 pub mod event;
 
+/// Custom color picker state.
+pub mod color_picker;
+
 /// Bar color palette.
 pub mod palette;
 

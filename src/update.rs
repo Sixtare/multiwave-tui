@@ -2,6 +2,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
     app::App,
+    color_picker::{ColorPicker, PickerFocus},
     event::{BatchEvent, EventBatch},
 };
 
@@ -92,6 +93,28 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
     outcome
 }
 
+/// Handles a key while the color picker is open.
+fn update_color_picker(app: &mut App, key_event: KeyEvent) {
+    let typing = app
+        .color_picker
+        .as_ref()
+        .is_some_and(|picker| picker.focus == PickerFocus::Hex);
+    let coarse = key_event.modifiers.contains(KeyModifiers::SHIFT);
+    match key_event.code {
+        KeyCode::Esc => app.close_color_picker(false),
+        KeyCode::Char('c') | KeyCode::Char('C') if !typing => app.close_color_picker(false),
+        KeyCode::Enter => app.close_color_picker(true),
+        KeyCode::Tab => app.edit_color_picker(ColorPicker::next_focus),
+        KeyCode::Backspace => app.edit_color_picker(ColorPicker::backspace),
+        KeyCode::Char(ch) if typing => app.edit_color_picker(|picker| picker.type_char(ch)),
+        KeyCode::Up | KeyCode::Char('k') => app.edit_color_picker(|p| p.nudge(0, -1, coarse)),
+        KeyCode::Down | KeyCode::Char('j') => app.edit_color_picker(|p| p.nudge(0, 1, coarse)),
+        KeyCode::Left => app.edit_color_picker(|p| p.nudge(-1, 0, coarse)),
+        KeyCode::Right => app.edit_color_picker(|p| p.nudge(1, 0, coarse)),
+        _ => {}
+    }
+}
+
 pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
     // The color popup previews on the bars, so it only touches `App` and needs no action.
     if app.show_color_popup {
@@ -101,19 +124,9 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             {
                 app.quit();
             }
-            // While the list of colors is open it takes the keys, and Esc/`c` only close the list.
-            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C')
-                if app.color_picker.is_some() =>
-            {
-                app.close_color_picker(false)
-            }
-            KeyCode::Enter if app.color_picker.is_some() => app.close_color_picker(true),
-            KeyCode::Up | KeyCode::Char('k') if app.color_picker.is_some() => {
-                app.move_color_picker(false)
-            }
-            KeyCode::Down | KeyCode::Char('j') if app.color_picker.is_some() => {
-                app.move_color_picker(true)
-            }
+            // While the color picker is open it takes the keys, and Esc only closes the picker.
+            // In its hex field letters are digits, so `c` types instead of closing.
+            _ if app.color_picker.is_some() => update_color_picker(app, key_event),
             KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_popup(),
             KeyCode::Enter => app.activate_color_row(),
             KeyCode::Up | KeyCode::Char('k') => app.select_prev_color_row(),
@@ -173,7 +186,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::Event;
+    use crate::{event::Event, palette::BarColor};
 
     fn key(code: KeyCode) -> Event {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
@@ -265,35 +278,70 @@ mod tests {
         assert_eq!(app.color_picker, None);
     }
 
-    #[test]
-    fn test_enter_opens_the_color_list_and_enter_picks_a_color() {
-        let mut app = App::new();
-        press(&mut app, KeyCode::Char('c'));
-        press(&mut app, KeyCode::Down);
-        press(&mut app, KeyCode::Enter);
-        assert_eq!(app.color_picker, Some(0));
-
-        press(&mut app, KeyCode::Down);
-        press(&mut app, KeyCode::Char('j'));
-        assert_eq!(app.palette.bands[0], crate::palette::BarColor::Lime);
-        press(&mut app, KeyCode::Enter);
-        assert_eq!(app.color_picker, None);
-        assert!(app.show_color_popup);
-        assert_eq!(app.palette.bands[0], crate::palette::BarColor::Lime);
-
-        press(&mut app, KeyCode::Esc);
-        assert!(!app.show_color_popup);
-        assert_eq!(app.palette.bands[0], crate::palette::BarColor::Lime);
+    fn open_picker_on_bass(app: &mut App) {
+        press(app, KeyCode::Char('c'));
+        press(app, KeyCode::Down);
+        press(app, KeyCode::Enter);
+        assert!(app.color_picker.is_some());
     }
 
     #[test]
-    fn test_esc_and_c_close_only_the_color_list_first() {
+    fn test_enter_opens_the_picker_and_arrows_preview_the_color() {
+        let mut app = App::new();
+        open_picker_on_bass(&mut app);
+
+        press(&mut app, KeyCode::Left);
+        let after_left = app.palette.bands[0];
+        assert_ne!(after_left, BarColor::CYAN);
+        // Shift moves in coarse steps.
+        update(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        assert!(app.palette.bands[0].r > after_left.r);
+        assert!(app.show_color_popup);
+        assert!(!app.smoothing);
+
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.color_picker, None);
+        assert!(app.show_color_popup);
+        let kept = app.palette.bands[0];
+
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.show_color_popup);
+        assert_eq!(app.palette.bands[0], kept);
+    }
+
+    #[test]
+    fn test_tab_moves_between_square_hue_strip_and_hex_field() {
+        let mut app = App::new();
+        open_picker_on_bass(&mut app);
+
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.color_picker.as_ref().unwrap().focus, PickerFocus::Hue);
+        press(&mut app, KeyCode::Down);
+        assert_ne!(app.palette.bands[0], BarColor::CYAN);
+
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.color_picker.as_ref().unwrap().focus, PickerFocus::Hex);
+        // `c`, `j` and `k` are typed into the hex field instead of acting as keys.
+        for ch in "ffc0ab".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+        assert!(app.color_picker.is_some());
+        assert_eq!(app.palette.bands[0], BarColor::rgb(0xFF, 0xC0, 0xAB));
+
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(
+            app.color_picker.as_ref().unwrap().focus,
+            PickerFocus::Square
+        );
+    }
+
+    #[test]
+    fn test_esc_and_c_close_only_the_picker_first() {
         for closing in [KeyCode::Esc, KeyCode::Char('c')] {
             let mut app = App::new();
-            press(&mut app, KeyCode::Char('c'));
+            open_picker_on_bass(&mut app);
             press(&mut app, KeyCode::Down);
-            press(&mut app, KeyCode::Enter);
-            press(&mut app, KeyCode::Down);
+            assert_ne!(app.palette.bands[0], BarColor::CYAN);
             press(&mut app, closing);
             assert!(app.show_color_popup);
             assert_eq!(app.color_picker, None);
@@ -303,6 +351,19 @@ mod tests {
             assert!(!app.show_color_popup);
             assert!(!app.show_popup);
         }
+    }
+
+    #[test]
+    fn test_esc_cancels_the_picker_from_the_hex_field() {
+        let mut app = App::new();
+        open_picker_on_bass(&mut app);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Char('c'));
+        assert!(app.color_picker.is_some());
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.color_picker, None);
+        assert!(app.show_color_popup);
     }
 
     #[test]

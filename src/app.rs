@@ -1,4 +1,7 @@
-use crate::palette::{BarColor, Palette};
+use crate::{
+    color_picker::ColorPicker,
+    palette::{BarColor, Palette},
+};
 
 /// Fewest bars the visualizer shows, even on a terminal too narrow to fit them.
 pub const MIN_BARS: usize = 32;
@@ -74,9 +77,9 @@ pub struct App {
     pub color_row: usize,
     /// Palette from before the color popup opened, to tell whether it changed.
     palette_at_open: Palette,
-    /// Highlighted index into [`BarColor::ALL`] while the color list is open for a row.
-    pub color_picker: Option<usize>,
-    /// Color of the edited row from before the color list opened, restored when it is cancelled.
+    /// The color picker, while it is open for the highlighted row.
+    pub color_picker: Option<ColorPicker>,
+    /// Color of the edited row from before the color picker opened, restored when it is cancelled.
     color_before_picker: BarColor,
 }
 
@@ -109,7 +112,7 @@ impl Default for App {
             color_row: 0,
             palette_at_open: Palette::default(),
             color_picker: None,
-            color_before_picker: BarColor::Cyan,
+            color_before_picker: BarColor::CYAN,
         }
     }
 }
@@ -328,8 +331,8 @@ impl App {
         self.color_row = self.palette.next_row(self.color_row, false);
     }
 
-    /// Acts on the highlighted row: flips the mode or the mirror checkbox, or opens the list of
-    /// colors for a color row.
+    /// Acts on the highlighted row: flips the mode or the mirror checkbox, or opens the color
+    /// picker for a color row.
     pub fn activate_color_row(&mut self) {
         match self.color_row {
             0 => self.palette.toggle_mode(),
@@ -337,29 +340,21 @@ impl App {
             _ => {
                 if let Some(color) = self.palette.row_color(self.color_row) {
                     self.color_before_picker = color;
-                    self.color_picker = BarColor::ALL.iter().position(|&c| c == color);
+                    self.color_picker = Some(ColorPicker::new(color));
                 }
             }
         }
     }
 
-    /// Moves the color list cursor by one and previews that color on the bars.
-    pub fn move_color_picker(&mut self, forward: bool) {
-        let Some(index) = self.color_picker else {
-            return;
-        };
-        let len = BarColor::ALL.len();
-        let index = if forward {
-            (index + 1) % len
-        } else {
-            (index + len - 1) % len
-        };
-        self.color_picker = Some(index);
-        self.palette
-            .set_row_color(self.color_row, BarColor::ALL[index]);
+    /// Lets `edit` change the open color picker, then previews its color on the bars.
+    pub fn edit_color_picker(&mut self, edit: impl FnOnce(&mut ColorPicker)) {
+        if let Some(picker) = &mut self.color_picker {
+            edit(picker);
+            self.palette.set_row_color(self.color_row, picker.color());
+        }
     }
 
-    /// Closes the color list, keeping the previewed color when `confirm` and restoring otherwise.
+    /// Closes the color picker, keeping the previewed color when `confirm` and restoring otherwise.
     pub fn close_color_picker(&mut self, confirm: bool) {
         if self.color_picker.take().is_some() && !confirm {
             self.palette
@@ -408,9 +403,16 @@ mod tests {
         app.open_color_popup();
         app.select_next_color_row();
         app.activate_color_row();
-        assert_eq!(app.color_picker, Some(0));
-        app.move_color_picker(true);
-        assert_eq!(app.palette.bands[0], BarColor::Green);
+        assert_eq!(
+            app.color_picker.as_ref().map(|p| p.color()),
+            Some(BarColor::CYAN)
+        );
+        app.edit_color_picker(|picker| picker.nudge(-10, 5, false));
+        assert_ne!(app.palette.bands[0], BarColor::CYAN);
+        assert_eq!(
+            app.palette.bands[0],
+            app.color_picker.as_ref().unwrap().color()
+        );
         app.close_color_picker(false);
         assert_eq!(app.palette, Palette::default());
         assert_eq!(app.color_picker, None);
@@ -422,9 +424,13 @@ mod tests {
         app.open_color_popup();
         app.select_next_color_row();
         app.activate_color_row();
-        app.move_color_picker(false);
+        app.edit_color_picker(|picker| {
+            picker.next_focus();
+            picker.next_focus();
+            "FF8000".chars().for_each(|ch| picker.type_char(ch));
+        });
         app.close_color_picker(true);
-        assert_eq!(app.palette.bands[0], BarColor::Gray);
+        assert_eq!(app.palette.bands[0], BarColor::rgb(255, 128, 0));
         assert_eq!(app.color_notice(), None);
 
         app.close_color_popup();

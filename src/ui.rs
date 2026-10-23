@@ -12,6 +12,7 @@ use ratatui::{
 
 use crate::{
     app::{App, COLUMNS_PER_BAR},
+    color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
     palette::{BarColor, Palette},
 };
 
@@ -39,7 +40,7 @@ pub struct FrameState {
     palette: Palette,
     show_color_popup: bool,
     color_row: usize,
-    color_picker: Option<usize>,
+    color_picker: Option<ColorPicker>,
     /// Color announcement, while it is on screen.
     color_notice: Option<String>,
 }
@@ -66,7 +67,7 @@ impl FrameState {
             palette: app.palette,
             show_color_popup: app.show_color_popup,
             color_row: app.color_row,
-            color_picker: app.color_picker,
+            color_picker: app.color_picker.clone(),
             color_notice: app.color_notice().filter(|_| !app.show_popup),
         }
     }
@@ -258,18 +259,32 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// Width of the color popup, and of the color picker box beside it: the square, a gap, the hue
+/// strip and its marker, plus the borders.
+const POPUP_WIDTH: u16 = 34;
+const PICKER_WIDTH: u16 = SQUARE_COLS as u16 + 1 + 2 + 1 + 2;
+/// Height of the color picker box: the square, a blank line and the hex line, plus the borders.
+const PICKER_HEIGHT: u16 = SQUARE_ROWS as u16 + 2 + 2;
+
 /// Draws the bar color popup over the visualizer, which keeps moving as a live preview.
 ///
-/// While a row's list of colors is open it is drawn in a second box to the right.
+/// While a row's color picker is open it is drawn in a second box to the right.
 fn render_color_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let palette = &app.palette;
     // One extra line separates the mirror checkbox from the colors.
     let height = (Palette::ROWS as u16 + 3).min(area.height);
-    let popup_area = area.centered(
-        Constraint::Length(34.min(area.width)),
-        Constraint::Length(height),
-    );
+    // While the picker is open the popup and the picker are centered together.
+    let group_width = if app.color_picker.is_some() && POPUP_WIDTH + PICKER_WIDTH <= area.width {
+        POPUP_WIDTH + PICKER_WIDTH
+    } else {
+        POPUP_WIDTH.min(area.width)
+    };
+    let group = area.centered(Constraint::Length(group_width), Constraint::Length(height));
+    let popup_area = Rect {
+        width: POPUP_WIDTH.min(area.width),
+        ..group
+    };
     if popup_area.width < 3 || popup_area.height < 3 {
         return;
     }
@@ -329,18 +344,18 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     lines.insert(Palette::MIRROR_ROW, Line::default());
     frame.render_widget(Paragraph::new(lines), inner);
 
-    if let Some(cursor) = app.color_picker {
-        render_color_list(frame, popup_area, cursor);
+    if let Some(picker) = &app.color_picker {
+        render_color_picker(frame, popup_area, picker);
     }
 }
 
-/// Draws the list of pickable colors to the right of `popup_area`, or over its right edge when
-/// the terminal has no room beside it.
-fn render_color_list(frame: &mut Frame, popup_area: Rect, cursor: usize) {
+/// Draws the color picker to the right of `popup_area`, or over its right edge when the terminal
+/// has no room beside it: the saturation/value square, the hue strip beside it and the hex field
+/// below.
+fn render_color_picker(frame: &mut Frame, popup_area: Rect, picker: &ColorPicker) {
     let area = frame.area();
-    let width = 20.min(area.width);
-    let colors = BarColor::ALL;
-    let height = (colors.len() as u16 + 2).min(area.height);
+    let width = PICKER_WIDTH.min(area.width);
+    let height = PICKER_HEIGHT.min(area.height);
     // Centered on the same horizontal axis as the popup, but kept inside the terminal.
     let centered_y = (popup_area.y + popup_area.height / 2).saturating_sub(height / 2);
     let y = centered_y.min(area.y + area.height - height);
@@ -349,51 +364,117 @@ fn render_color_list(frame: &mut Frame, popup_area: Rect, cursor: usize) {
     } else {
         area.right() - width
     };
-    let list_area = Rect {
+    let picker_area = Rect {
         x,
         y,
         width,
         height,
     };
-    if list_area.width < 3 || list_area.height < 3 {
+    if picker_area.width < 3 || picker_area.height < 3 {
         return;
     }
 
     let block = Block::bordered()
         .title(" Color ")
         .title_alignment(Alignment::Center)
+        .title_bottom(Line::from(" Tab:focus Enter:ok ").centered())
         .border_type(BorderType::Rounded);
-    let inner = block.inner(list_area);
-    frame.render_widget(Clear, list_area);
-    frame.render_widget(block, list_area);
+    let inner = block.inner(picker_area);
+    frame.render_widget(Clear, picker_area);
+    frame.render_widget(block, picker_area);
 
-    // Scroll so the cursor stays visible on a short terminal.
-    let visible = inner.height as usize;
-    let offset = (cursor + 1).saturating_sub(visible);
-    let lines: Vec<Line> = colors
-        .iter()
-        .enumerate()
-        .skip(offset)
-        .take(visible)
-        .map(|(i, &color)| {
-            let style = if i == cursor {
-                Style::default().fg(Color::Cyan).bold()
+    let focused = |part: PickerFocus| picker.focus == part;
+    let buf = frame.buffer_mut();
+    let mut paint = |col: usize, row: usize, glyph: char, fg: Color, bg: Color| {
+        if col < inner.width as usize && row < inner.height as usize {
+            buf[(inner.x + col as u16, inner.y + row as u16)]
+                .set_char(glyph)
+                .set_fg(fg)
+                .set_bg(bg);
+        }
+    };
+
+    // Saturation grows to the right and value upward; the cursor shows the picked spot.
+    let (cursor_col, cursor_row) = picker.square_cursor();
+    for row in 0..SQUARE_ROWS {
+        for col in 0..SQUARE_COLS {
+            let saturation = col as f32 / (SQUARE_COLS - 1) as f32;
+            let value = 1.0 - row as f32 / (SQUARE_ROWS - 1) as f32;
+            let cell = BarColor::from_hsv(picker.hue, saturation, value);
+            if (col, row) == (cursor_col, cursor_row) {
+                let glyph = if focused(PickerFocus::Square) {
+                    '◆'
+                } else {
+                    '+'
+                };
+                paint(col, row, glyph, contrast_color(cell), cell.color());
             } else {
-                Style::default().fg(Color::White)
-            };
-            let mut spans = vec![Span::styled(if i == cursor { "> " } else { "  " }, style)];
-            spans.extend(color_value(color, Style::default()));
-            Line::from(spans)
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), inner);
+                paint(col, row, ' ', Color::Reset, cell.color());
+            }
+        }
+    }
+
+    // The hue strip runs from red at the top through the rainbow and back to red.
+    let strip_col = SQUARE_COLS + 1;
+    for row in 0..HUE_ROWS {
+        let hue = row as f32 / (HUE_ROWS - 1) as f32 * 360.0;
+        let cell = BarColor::from_hsv(hue, 1.0, 1.0).color();
+        paint(strip_col, row, ' ', Color::Reset, cell);
+        paint(strip_col + 1, row, ' ', Color::Reset, cell);
+    }
+    let marker_color = if focused(PickerFocus::Hue) {
+        Color::Cyan
+    } else {
+        Color::White
+    };
+    paint(
+        strip_col + 2,
+        picker.hue_row(),
+        '◀',
+        marker_color,
+        Color::Reset,
+    );
+
+    // Hex field: a swatch of the picked color and its `#RRGGBB` value.
+    let hex_style = if focused(PickerFocus::Hex) {
+        Style::default().fg(Color::Cyan).bold()
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let cursor = if focused(PickerFocus::Hex) && picker.hex.len() < 6 {
+        "_"
+    } else {
+        ""
+    };
+    let hex_line = Line::from(vec![
+        Span::styled("████", Style::default().fg(picker.color().color())),
+        Span::styled(format!(" #{}{cursor}", picker.hex), hex_style),
+    ]);
+    if inner.height > SQUARE_ROWS as u16 + 1 {
+        let hex_area = Rect {
+            y: inner.y + SQUARE_ROWS as u16 + 1,
+            height: 1,
+            ..inner
+        };
+        frame.render_widget(Paragraph::new(hex_line), hex_area);
+    }
 }
 
-/// A color swatch followed by the color's name.
+/// Black or white, whichever reads better on top of `color`.
+fn contrast_color(color: BarColor) -> Color {
+    let luminance = 0.299 * color.r as f32 + 0.587 * color.g as f32 + 0.114 * color.b as f32;
+    if luminance > 140.0 {
+        Color::Black
+    } else {
+        Color::White
+    }
+}
+
+/// A color swatch followed by the color's hex value.
 fn color_value(color: BarColor, name_style: Style) -> Vec<Span<'static>> {
     vec![
         Span::styled("████", Style::default().fg(color.color())),
-        Span::styled(format!(" {}", color.name()), name_style),
+        Span::styled(format!(" {}", color.hex()), name_style),
     ]
 }
 
@@ -530,7 +611,7 @@ mod tests {
 
         // 7 rows: 3 upper, divider, 3 mirror; 64 columns centered in 80.
         assert_eq!(buffer[(8, 0)].symbol(), "█");
-        assert_eq!(buffer[(8, 0)].fg, Color::Cyan);
+        assert_eq!(buffer[(8, 0)].fg, Color::Rgb(0, 255, 255));
         assert_eq!(buffer[(9, 0)].symbol(), " ");
         assert_eq!(buffer[(10, 0)].symbol(), " ");
         assert_eq!(buffer[(7, 3)].symbol(), " ");
@@ -547,8 +628,8 @@ mod tests {
     fn test_soundwave_clips_treble_on_narrow_terminal() {
         let buffer = render_bars(&[1.0; 32], 40, 7);
 
-        assert_eq!(buffer[(0, 0)].fg, Color::Cyan);
-        assert_eq!(buffer[(39, 0)].fg, Color::Green);
+        assert_eq!(buffer[(0, 0)].fg, Color::Rgb(0, 255, 255));
+        assert_eq!(buffer[(39, 0)].fg, Color::Rgb(0, 205, 0));
     }
 
     #[test]
@@ -702,40 +783,71 @@ mod tests {
         assert!(text.contains("Bar Colors"));
         assert!(text.contains("Single color"));
         // Bars outside the popup already use the previewed single color.
-        assert_eq!(buffer[(8, 1)].fg, Color::Cyan);
+        assert_eq!(buffer[(8, 1)].fg, Color::Rgb(0, 255, 255));
     }
 
     #[test]
-    fn test_color_list_opens_to_the_right_of_the_popup() {
+    fn test_color_picker_opens_to_the_right_of_the_popup_and_both_are_centered() {
         let mut app = App::new();
         app.open_color_popup();
         app.select_next_color_row();
         app.activate_color_row();
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
         let buffer = terminal.backend().buffer();
 
-        let row = |y: u16| -> String { (0..80).map(|x| buffer[(x, y)].symbol()).collect() };
-        let title_row = (0..20).find(|&y| row(y).contains("Bar Colors")).unwrap();
-        let popup_col = row(title_row).find("Bar Colors").unwrap();
-        let list_title_col = (0..20)
-            .filter_map(|y| row(y).find(" Color "))
-            .next()
-            .expect("color list title");
-        assert!(list_title_col > popup_col + 10);
-
-        // Both boxes share the same center row: compare their top and bottom corners.
+        // The two boxes are centered together: 34 + 26 columns in 80 start at column 10.
         let corner_rows = |x: u16| -> (u16, u16) {
-            let top = (0..20).find(|&y| buffer[(x, y)].symbol() == "╭").unwrap();
-            let bottom = (0..20).find(|&y| buffer[(x, y)].symbol() == "╰").unwrap();
+            let top = (0..24).find(|&y| buffer[(x, y)].symbol() == "╭").unwrap();
+            let bottom = (0..24).find(|&y| buffer[(x, y)].symbol() == "╰").unwrap();
             (top, bottom)
         };
-        let (popup_top, popup_bottom) = corner_rows(23);
-        let (list_top, list_bottom) = corner_rows(57);
-        assert_eq!(popup_top + popup_bottom, list_top + list_bottom);
-        let all: String = (0..20).map(row).collect();
-        assert!(all.contains("Gray"));
+        let (popup_top, popup_bottom) = corner_rows(10);
+        let (picker_top, picker_bottom) = corner_rows(44);
+        // Both boxes share the same center row.
+        assert_eq!(popup_top + popup_bottom, picker_top + picker_bottom);
+        assert_eq!(picker_bottom - picker_top + 1, PICKER_HEIGHT);
+
+        let text = |y: u16| -> String { (44..70).map(|x| buffer[(x, y)].symbol()).collect() };
+        assert!(text(picker_top).contains("Color"));
+        assert!(text(picker_bottom - 1).contains("#00FFFF"));
+
+        // The square's top right corner is the full color: cyan, with the cursor on it.
+        let square_x = 45 + SQUARE_COLS as u16 - 1;
+        let cell = &buffer[(square_x, picker_top + 1)];
+        assert_eq!(cell.symbol(), "◆");
+        assert_eq!(cell.bg, Color::Rgb(0, 255, 255));
+        // The hue strip starts at red and its marker sits on the cyan row.
+        assert_eq!(
+            buffer[(45 + SQUARE_COLS as u16 + 1, picker_top + 1)].bg,
+            Color::Rgb(255, 0, 0)
+        );
+        let marker_y = picker_top + 1 + 5;
+        assert_eq!(
+            buffer[(45 + SQUARE_COLS as u16 + 3, marker_y)].symbol(),
+            "◀"
+        );
+    }
+
+    #[test]
+    fn test_color_picker_cursor_moves_with_the_keys() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.select_next_color_row();
+        app.activate_color_row();
+        app.edit_color_picker(|picker| picker.nudge(-100, 100, true));
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let top = (0..24).find(|&y| buffer[(44, y)].symbol() == "╭").unwrap();
+        // Bottom left of the square is black.
+        let cell = &buffer[(45, top + SQUARE_ROWS as u16)];
+        assert_eq!(cell.symbol(), "◆");
+        assert_eq!(cell.bg, Color::Rgb(0, 0, 0));
+        assert_eq!(cell.fg, Color::White);
+        assert_eq!(app.palette.bands[0], BarColor::rgb(0, 0, 0));
     }
 
     #[test]
@@ -763,8 +875,8 @@ mod tests {
         assert_eq!(label(top + 2), Color::White);
         assert_eq!(label(top + 3), Color::DarkGray);
         assert_eq!(label(top + 4), Color::DarkGray);
-        assert_eq!(buffer[(swatch_x, top + 3)].fg, Color::Cyan);
-        assert_eq!(buffer[(swatch_x, top + 4)].fg, Color::Cyan);
+        assert_eq!(buffer[(swatch_x, top + 3)].fg, Color::Rgb(0, 255, 255));
+        assert_eq!(buffer[(swatch_x, top + 4)].fg, Color::Rgb(0, 255, 255));
     }
 
     #[test]
@@ -788,10 +900,9 @@ mod tests {
             .collect();
         assert!(text.contains("[ ] Darker"));
         let darker_color = |buffer: &Buffer| {
-            let row = (0..24)
-                .find(|&y| (0..80).any(|x| buffer[(x, y)].symbol() == "D"))
-                .unwrap();
-            let x = (0..80).find(|&x| buffer[(x, row)].symbol() == "D").unwrap();
+            let line = |y: u16| -> String { (0..80).map(|x| buffer[(x, y)].symbol()).collect() };
+            let row = (0..24).find(|&y| line(y).contains("Darker")).unwrap();
+            let x = line(row).split("Darker").next().unwrap().chars().count() as u16;
             buffer[(x, row)].fg
         };
         // Off: the normal selected color. On: green.
@@ -803,7 +914,7 @@ mod tests {
         app.activate_color_row();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
         // The leftmost mirror cell has the same color as the bar above the divider.
-        assert_eq!(buffer[(8, 23)].fg, Color::Cyan);
+        assert_eq!(buffer[(8, 23)].fg, Color::Rgb(0, 255, 255));
     }
 
     #[test]
@@ -820,7 +931,7 @@ mod tests {
         app.activate_color_row();
         let picking = FrameState::capture(&app, SIZE);
         assert_ne!(moved, picking);
-        app.move_color_picker(true);
+        app.edit_color_picker(|picker| picker.nudge(-1, 0, false));
         assert_ne!(picking, FrameState::capture(&app, SIZE));
     }
 
@@ -836,10 +947,10 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         let top_row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
-        assert!(top_row.ends_with(" color: Cyan "), "{top_row:?}");
+        assert!(top_row.ends_with(" color: #00FFFF "), "{top_row:?}");
         assert_eq!(
             FrameState::capture(&app, SIZE).color_notice.as_deref(),
-            Some("Cyan")
+            Some("#00FFFF")
         );
     }
 
