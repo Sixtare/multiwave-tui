@@ -8,8 +8,8 @@ pub const BAR_STEP: usize = 8;
 pub const COLUMNS_PER_BAR: usize = 2;
 /// Lowest and highest sensitivity (gain) multiplier, and how much each key press changes it.
 pub const MIN_GAIN: f32 = 0.1;
-pub const MAX_GAIN: f32 = 20.0;
-const GAIN_STEP: f32 = 0.25;
+pub const MAX_GAIN: f32 = 5.0;
+const GAIN_STEP: f32 = 0.10;
 /// How long a bar count or sensitivity notice stays on screen, in ticks (~1.5 s at 60 FPS).
 const NOTICE_TICKS: u64 = 90;
 
@@ -34,7 +34,8 @@ pub struct App {
     pub audio_bars: Vec<f32>,
     /// Vector containing the target values most recently received from the FFT.
     pub target_bars: Vec<f32>,
-    /// Sensitivity gain multiplier for visualization.
+    /// Manual sensitivity multiplier, applied by the audio processor on top of its automatic
+    /// sensitivity.
     pub gain: f32,
     /// Attack factor: fast and damped rising response.
     pub attack_factor: f32,
@@ -237,13 +238,13 @@ impl App {
 
     /// Increases visualization sensitivity/gain.
     pub fn increase_gain(&mut self) {
-        self.gain = (self.gain + GAIN_STEP).min(MAX_GAIN);
+        self.gain = round_gain((self.gain + GAIN_STEP).min(MAX_GAIN));
         self.gain_notice_until = self.tick_counter + NOTICE_TICKS;
     }
 
     /// Decreases visualization sensitivity/gain.
     pub fn decrease_gain(&mut self) {
-        self.gain = (self.gain - GAIN_STEP).max(MIN_GAIN);
+        self.gain = round_gain((self.gain - GAIN_STEP).max(MIN_GAIN));
         self.gain_notice_until = self.tick_counter + NOTICE_TICKS;
     }
 
@@ -251,14 +252,12 @@ impl App {
     pub fn gain_notice(&self) -> Option<f32> {
         (self.tick_counter < self.gain_notice_until).then_some(self.gain)
     }
+}
 
-    /// Returns audio bars with the current gain adjustment applied.
-    pub fn displayed_bars(&self) -> Vec<f32> {
-        self.audio_bars
-            .iter()
-            .map(|&amp| (amp * self.gain).clamp(0.0, 1.0))
-            .collect()
-    }
+/// Rounds the gain to two decimals, so repeated 0.10 steps don't pick up float noise
+/// (1.2000000000000002 and the like) and the limits are reached exactly.
+fn round_gain(gain: f32) -> f32 {
+    (gain * 100.0).round() / 100.0
 }
 
 /// Stretches `bars` to `len` entries by picking the nearest source bar for each new one.
@@ -444,20 +443,49 @@ mod tests {
             ..App::default()
         };
         app.increase_gain();
-        assert_eq!(app.gain, 1.25);
-        assert_eq!(app.displayed_bars()[0], (0.4_f32 * 1.25).clamp(0.0, 1.0));
+        assert_eq!(app.gain, 1.1);
+        // The gain reaches the bars through the audio processor, not through the app.
+        assert_eq!(app.audio_bars[0], 0.4);
     }
 
     #[test]
-    fn test_gain_goes_up_to_twenty_and_down_to_a_tenth() {
+    fn test_gain_goes_up_to_five_and_down_to_a_tenth() {
         let mut app = App::default();
         for _ in 0..200 {
             app.increase_gain();
         }
         assert_eq!(app.gain, MAX_GAIN);
-        assert_eq!(MAX_GAIN, 20.0);
+        assert_eq!(MAX_GAIN, 5.0);
 
         for _ in 0..200 {
+            app.decrease_gain();
+        }
+        assert_eq!(app.gain, MIN_GAIN);
+    }
+
+    #[test]
+    fn test_gain_moves_in_steps_of_a_tenth_without_drift() {
+        let mut app = App::default();
+        for expected in [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0] {
+            app.increase_gain();
+            assert_eq!(app.gain, expected);
+        }
+
+        for expected in [1.9, 1.8, 1.7] {
+            app.decrease_gain();
+            assert_eq!(app.gain, expected);
+        }
+    }
+
+    #[test]
+    fn test_gain_reaches_both_limits_exactly() {
+        let mut app = App::default();
+        for _ in 0..40 {
+            app.increase_gain();
+        }
+        assert_eq!(app.gain, MAX_GAIN);
+
+        for _ in 0..49 {
             app.decrease_gain();
         }
         assert_eq!(app.gain, MIN_GAIN);
@@ -469,7 +497,7 @@ mod tests {
         assert_eq!(app.gain_notice(), None);
 
         app.increase_gain();
-        assert_eq!(app.gain_notice(), Some(1.25));
+        assert_eq!(app.gain_notice(), Some(1.1));
 
         for _ in 0..NOTICE_TICKS {
             app.tick();
@@ -497,7 +525,7 @@ mod tests {
 
         app.increase_bar_count();
         assert_eq!(app.bar_notice(), Some(40));
-        assert_eq!(app.gain_notice(), Some(1.25));
+        assert_eq!(app.gain_notice(), Some(1.1));
     }
 
     #[test]

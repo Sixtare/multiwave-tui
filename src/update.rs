@@ -6,12 +6,14 @@ use crate::{
 };
 
 /// Actions that require external handling (e.g., audio hardware), performed by `main`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppAction {
     /// Request to change the active captured audio device to the specified index.
     ChangeDevice(usize),
     /// Make the running capture produce this many bars.
     SetBarCount(usize),
+    /// Make the running capture apply this manual sensitivity.
+    SetGain(f32),
     /// Rebuild capture after the audio callback reported a lost or invalidated stream.
     RecoverLostDevice,
     /// Check whether the default output or device list changed (rate-limited by `SoundDevice`).
@@ -35,6 +37,7 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
     let mut outcome = BatchOutcome::default();
     let has_tick = batch.has_tick();
     let bar_count_before = app.bar_count;
+    let gain_before = app.gain;
 
     // Applied first so keys and audio frames in the same batch see the new terminal width.
     if let Some(width) = batch.latest_width {
@@ -65,6 +68,10 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
     // Keys and resizes can both change the bar count; the capture only needs the final one.
     if app.bar_count != bar_count_before {
         outcome.actions.push(AppAction::SetBarCount(app.bar_count));
+    }
+
+    if app.gain != gain_before {
+        outcome.actions.push(AppAction::SetGain(app.gain));
     }
 
     for _ in 0..batch.ticks {
@@ -328,5 +335,33 @@ mod tests {
         );
 
         assert_eq!(app.bar_count, 32);
+    }
+
+    #[test]
+    fn test_gain_keys_in_a_batch_send_only_the_final_gain() {
+        let mut app = App::new();
+
+        let outcome = apply_batch(
+            &mut app,
+            batch_of(vec![
+                key(KeyCode::Up),
+                key(KeyCode::Up),
+                key(KeyCode::Char('i')),
+                key(KeyCode::Down),
+            ]),
+        );
+
+        assert_eq!(app.gain, 1.2);
+        assert_eq!(outcome.actions, vec![AppAction::SetGain(1.2)]);
+    }
+
+    #[test]
+    fn test_gain_at_its_limit_sends_no_action() {
+        let mut app = App::new();
+        app.gain = crate::app::MAX_GAIN;
+
+        let outcome = apply_batch(&mut app, batch_of(vec![key(KeyCode::Up)]));
+
+        assert!(outcome.actions.is_empty());
     }
 }
