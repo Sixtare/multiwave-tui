@@ -93,6 +93,25 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
 }
 
 pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
+    // The color popup previews on the bars, so it only touches `App` and needs no action.
+    if app.show_color_popup {
+        match key_event.code {
+            KeyCode::Char('c') | KeyCode::Char('C')
+                if key_event.modifiers == KeyModifiers::CONTROL =>
+            {
+                app.quit();
+            }
+            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_popup(false),
+            KeyCode::Enter => app.close_color_popup(true),
+            KeyCode::Up | KeyCode::Char('k') => app.select_prev_color_row(),
+            KeyCode::Down | KeyCode::Char('j') => app.select_next_color_row(),
+            KeyCode::Left => app.adjust_color_row(false),
+            KeyCode::Right => app.adjust_color_row(true),
+            _ => {}
+        }
+        return None;
+    }
+
     // If the device selection popup is open, handle navigation and confirmation
     if app.show_popup {
         match key_event.code {
@@ -130,6 +149,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             app.show_popup = true;
         }
         KeyCode::Char('s') => app.toggle_smoothing(),
+        KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Right | KeyCode::Char('l') => app.increase_bar_count(),
         KeyCode::Left | KeyCode::Char('j') => app.decrease_bar_count(),
         KeyCode::Up | KeyCode::Char('i') => app.increase_gain(),
@@ -208,6 +228,63 @@ mod tests {
                 draw: false,
             }
         );
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        update(app, KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn test_c_opens_the_color_popup_and_swallows_other_keys() {
+        let mut app = App::new();
+        app.set_terminal_width(200);
+        press(&mut app, KeyCode::Char('c'));
+        assert!(app.show_color_popup);
+
+        press(&mut app, KeyCode::Char('s'));
+        press(&mut app, KeyCode::Char('q'));
+        assert!(!app.smoothing);
+        assert!(!app.should_quit);
+
+        press(&mut app, KeyCode::Right);
+        assert!(app.palette.single_mode);
+        assert_eq!(app.bar_count, 32);
+
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.palette.single, crate::palette::BarColor::Green);
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.show_color_popup);
+        assert_eq!(app.palette.single, crate::palette::BarColor::Green);
+    }
+
+    #[test]
+    fn test_esc_and_c_cancel_the_color_popup() {
+        for closing in [KeyCode::Esc, KeyCode::Char('c')] {
+            let mut app = App::new();
+            press(&mut app, KeyCode::Char('c'));
+            press(&mut app, KeyCode::Right);
+            press(&mut app, closing);
+            assert!(!app.show_color_popup);
+            assert!(!app.show_popup);
+            assert_eq!(app.palette, crate::palette::Palette::default());
+        }
+    }
+
+    #[test]
+    fn test_c_is_swallowed_by_the_device_popup_and_ctrl_c_quits_from_the_color_popup() {
+        let mut app = App::new();
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('c'));
+        assert!(!app.show_color_popup);
+
+        let mut app = App::new();
+        press(&mut app, KeyCode::Char('c'));
+        update(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert!(app.should_quit);
     }
 
     #[test]

@@ -3,14 +3,17 @@ use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Rect, Size},
     style::{Color, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{
         Block, BorderType, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
         Widget,
     },
 };
 
-use crate::app::{App, COLUMNS_PER_BAR};
+use crate::{
+    app::{App, COLUMNS_PER_BAR},
+    palette::{BarColor, Palette},
+};
 
 /// Everything [`render`] reads from the app, plus the terminal size.
 ///
@@ -33,6 +36,11 @@ pub struct FrameState {
     gain_notice: Option<f32>,
     /// Smoothing announcement, while it is on screen.
     smoothing_notice: Option<bool>,
+    palette: Palette,
+    show_color_popup: bool,
+    color_row: usize,
+    /// Color announcement, while it is on screen.
+    color_notice: Option<String>,
 }
 
 impl FrameState {
@@ -54,13 +62,22 @@ impl FrameState {
             bar_notice: app.bar_notice().filter(|_| !app.show_popup),
             gain_notice: app.gain_notice().filter(|_| !app.show_popup),
             smoothing_notice: app.smoothing_notice().filter(|_| !app.show_popup),
+            palette: app.palette,
+            show_color_popup: app.show_color_popup,
+            color_row: app.color_row,
+            color_notice: app.color_notice().filter(|_| !app.show_popup),
         }
     }
 }
 
 pub fn render(app: &mut App, frame: &mut Frame) {
     match app.show_popup {
-        false => draw_soundwave(frame, frame.area(), &app.audio_bars),
+        false => {
+            draw_soundwave(frame, frame.area(), &app.audio_bars, &app.palette);
+            if app.show_color_popup {
+                render_color_popup(frame, app);
+            }
+        }
         // Uses the full screen, centering the visualizer vertically and horizontally
         true => render_popup(frame, app),
     }
@@ -78,6 +95,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     if let Some(on) = app.smoothing_notice().filter(|_| !app.show_popup) {
         let state = if on { "on" } else { "off" };
         render_notice(frame, notice_row, &format!(" smoothing {state} "));
+        notice_row += 1;
+    }
+    if let Some(color) = app.color_notice().filter(|_| !app.show_popup) {
+        render_notice(frame, notice_row, &format!(" color: {color} "));
     }
 
     if let Some(error) = &app.audio_error {
@@ -235,6 +256,75 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// Draws the bar color picker over the visualizer, which keeps moving as a live preview.
+fn render_color_popup(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let palette = &app.palette;
+    let height = (palette.row_count() as u16 + 2).min(area.height);
+    let popup_area = area.centered(
+        Constraint::Length(46.min(area.width)),
+        Constraint::Length(height),
+    );
+    if popup_area.width < 3 || popup_area.height < 3 {
+        return;
+    }
+
+    let block = Block::bordered()
+        .title(" Bar Colors ")
+        .title_alignment(Alignment::Center)
+        .title_bottom(Line::from(" ←/→ change  ↑/↓ row  Enter ok  Esc cancel ").centered())
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(popup_area);
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(block, popup_area);
+
+    let labels: &[&str] = if palette.single_mode {
+        &["Mode", "Color"]
+    } else {
+        &["Mode", "Bass", "Mids", "Treble"]
+    };
+    let lines: Vec<Line> = labels
+        .iter()
+        .enumerate()
+        .map(|(row, label)| {
+            let selected = row == app.color_row;
+            let text_style = if selected {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let value = match palette.row_color(row) {
+                Some(color) => color_value(color),
+                None => vec![Span::styled(
+                    if palette.single_mode {
+                        "Single color"
+                    } else {
+                        "Gradient"
+                    },
+                    text_style,
+                )],
+            };
+            let mut spans = vec![Span::styled(
+                format!("{} {:<7}", if selected { ">" } else { " " }, label),
+                text_style,
+            )];
+            spans.push(Span::styled("◀ ", text_style));
+            spans.extend(value);
+            spans.push(Span::styled(" ▶", text_style));
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// A color swatch followed by the color's name.
+fn color_value(color: BarColor) -> Vec<Span<'static>> {
+    vec![
+        Span::styled("████", Style::default().fg(color.color())),
+        Span::raw(format!(" {}", color.name())),
+    ]
+}
+
 /// Picks the glyph for one bar cell, given the row's threshold and the glyph ramp to use.
 fn bar_glyph(amplitude: f32, threshold: f32, rows: usize, glyphs: &[char]) -> char {
     let row_span = 1.0 / rows as f32;
@@ -267,6 +357,7 @@ fn band_color(bar: usize, bar_count: usize, [bass, mids, treble]: [Color; 3]) ->
 /// which dominated the app's CPU use.
 struct Soundwave<'a> {
     bars: &'a [f32],
+    palette: &'a Palette,
 }
 
 impl Widget for Soundwave<'_> {
@@ -300,19 +391,12 @@ impl Widget for Soundwave<'_> {
             }
         };
 
+        let band_colors = self.palette.colors();
+        let mirror_band_colors = self.palette.mirror_colors();
         for (i, &amplitude) in self.bars.iter().enumerate() {
-            // Vibrant gradient: bass cyan -> mids green -> treble magenta
-            let color = band_color(i, bar_count, [Color::Cyan, Color::Green, Color::Magenta]);
+            let color = band_color(i, bar_count, band_colors);
             // Mirror reflection colors: softer/darker tones for depth effect
-            let mirror_color = band_color(
-                i,
-                bar_count,
-                [
-                    Color::Rgb(0, 120, 160),
-                    Color::Rgb(30, 130, 70),
-                    Color::Rgb(130, 40, 130),
-                ],
-            );
+            let mirror_color = band_color(i, bar_count, mirror_band_colors);
             let normalized = amplitude.clamp(0.0, 1.0);
             // Slight reflection attenuation for a more realistic mirror/water effect
             let mirror_amplitude = (amplitude * 0.85).clamp(0.0, 1.0);
@@ -347,8 +431,8 @@ impl Widget for Soundwave<'_> {
     }
 }
 
-pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32]) {
-    frame.render_widget(Soundwave { bars }, area);
+pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32], palette: &Palette) {
+    frame.render_widget(Soundwave { bars, palette }, area);
 }
 
 #[cfg(test)]
@@ -361,7 +445,7 @@ mod tests {
     fn render_bars(bars: &[f32], width: u16, height: u16) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|frame| draw_soundwave(frame, frame.area(), bars))
+            .draw(|frame| draw_soundwave(frame, frame.area(), bars, &Palette::default()))
             .unwrap();
         terminal.backend().buffer().clone()
     }
@@ -383,7 +467,7 @@ mod tests {
         assert_eq!(buffer[(72, 3)].symbol(), " ");
         // The mirror is attenuated to 0.85, so its last row is partially filled.
         assert_eq!(buffer[(8, 4)].symbol(), "█");
-        assert_eq!(buffer[(8, 4)].fg, Color::Rgb(0, 120, 160));
+        assert_eq!(buffer[(8, 4)].fg, Color::Rgb(0, 128, 128));
         assert_eq!(buffer[(8, 6)].symbol(), "▀");
     }
 
@@ -525,6 +609,62 @@ mod tests {
             app.tick();
         }
         assert_eq!(FrameState::capture(&app, SIZE).smoothing_notice, None);
+    }
+
+    #[test]
+    fn test_color_popup_previews_on_the_bars_and_is_drawn_over_them() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.adjust_color_row(true);
+        app.update_audio_bars(vec![1.0; 32]);
+        app.tick();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let text: String = (0..12)
+            .flat_map(|y| (0..80).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+            .collect();
+        assert!(text.contains("Bar Colors"));
+        assert!(text.contains("Single color"));
+        // Bars outside the popup already use the previewed single color.
+        assert_eq!(buffer[(8, 1)].fg, Color::Cyan);
+    }
+
+    #[test]
+    fn test_frame_state_changes_with_the_palette_and_color_popup() {
+        let mut app = App::new();
+        let before = FrameState::capture(&app, SIZE);
+
+        app.open_color_popup();
+        let open = FrameState::capture(&app, SIZE);
+        assert_ne!(before, open);
+        app.select_next_color_row();
+        let moved = FrameState::capture(&app, SIZE);
+        assert_ne!(open, moved);
+        app.adjust_color_row(true);
+        assert_ne!(moved, FrameState::capture(&app, SIZE));
+    }
+
+    #[test]
+    fn test_color_notice_is_drawn_after_confirming() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.adjust_color_row(true);
+        app.close_color_popup(true);
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let top_row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
+        assert!(top_row.ends_with(" color: Cyan "), "{top_row:?}");
+        assert_eq!(
+            FrameState::capture(&app, SIZE).color_notice.as_deref(),
+            Some("Cyan")
+        );
     }
 
     #[test]

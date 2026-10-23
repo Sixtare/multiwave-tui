@@ -7,6 +7,9 @@ pub mod audio_processor;
 /// Terminal events handler.
 pub mod event;
 
+/// Bar color palette.
+pub mod palette;
+
 /// Widget renderer.
 pub mod ui;
 

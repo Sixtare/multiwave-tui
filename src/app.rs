@@ -1,3 +1,5 @@
+use crate::palette::Palette;
+
 /// Fewest bars the visualizer shows, even on a terminal too narrow to fit them.
 pub const MIN_BARS: usize = 32;
 /// Most bars the visualizer shows, however wide the terminal is.
@@ -13,7 +15,7 @@ const GAIN_STEP: f32 = 0.10;
 /// Bar response with smoothing off: fast on both ways, applied on every audio frame and tick.
 const PLAIN_ATTACK_FACTOR: f32 = 0.65;
 const PLAIN_DECAY_FACTOR: f32 = 0.20;
-/// How long a bar count, sensitivity or smoothing notice stays on screen, in ticks (~1.5 s at
+/// How long a bar count, sensitivity, smoothing or color notice stays on screen, in ticks (~1.5 s at
 /// 60 FPS).
 const NOTICE_TICKS: u64 = 90;
 
@@ -36,6 +38,8 @@ pub struct App {
     gain_notice_until: u64,
     /// Tick until which the smoothing notice is shown.
     smoothing_notice_until: u64,
+    /// Tick until which the color notice is shown.
+    color_notice_until: u64,
     /// Vector containing normalized and smoothed audio bar magnitudes (0.0 to 1.0).
     pub audio_bars: Vec<f32>,
     /// Vector containing the target values most recently received from the FFT.
@@ -62,6 +66,14 @@ pub struct App {
     pub device_scroll_offset: usize,
     /// Most recent audio device or stream error, if any.
     pub audio_error: Option<String>,
+    /// How the bars are colored. While the color popup is open it holds the live preview.
+    pub palette: Palette,
+    /// Whether to display the bar color popup.
+    pub show_color_popup: bool,
+    /// Highlighted row of the color popup (0 is the mode row).
+    pub color_row: usize,
+    /// Palette from before the color popup opened, restored when it is cancelled.
+    palette_before_popup: Palette,
 }
 
 impl Default for App {
@@ -75,6 +87,7 @@ impl Default for App {
             bar_notice_until: 0,
             gain_notice_until: 0,
             smoothing_notice_until: 0,
+            color_notice_until: 0,
             audio_bars: vec![0.0; MIN_BARS],
             target_bars: vec![0.0; MIN_BARS],
             gain: 1.0,
@@ -87,6 +100,10 @@ impl Default for App {
             active_device_idx: 0,
             device_scroll_offset: 0,
             audio_error: None,
+            palette: Palette::default(),
+            show_color_popup: false,
+            color_row: 0,
+            palette_before_popup: Palette::default(),
         }
     }
 }
@@ -278,6 +295,45 @@ impl App {
         (self.tick_counter < self.smoothing_notice_until).then_some(self.smoothing)
     }
 
+    /// Opens the color popup, remembering the current palette so Esc can restore it.
+    pub fn open_color_popup(&mut self) {
+        self.palette_before_popup = self.palette;
+        self.color_row = 0;
+        self.show_color_popup = true;
+    }
+
+    /// Closes the color popup, keeping the previewed palette on confirm or restoring the old one.
+    pub fn close_color_popup(&mut self, confirm: bool) {
+        self.show_color_popup = false;
+        if confirm {
+            self.color_notice_until = self.tick_counter + NOTICE_TICKS;
+        } else {
+            self.palette = self.palette_before_popup;
+        }
+    }
+
+    /// Moves the color popup cursor down.
+    pub fn select_next_color_row(&mut self) {
+        self.color_row = (self.color_row + 1) % self.palette.row_count();
+    }
+
+    /// Moves the color popup cursor up.
+    pub fn select_prev_color_row(&mut self) {
+        let rows = self.palette.row_count();
+        self.color_row = (self.color_row + rows - 1) % rows;
+    }
+
+    /// Changes the highlighted row's mode or color, previewing it right away.
+    pub fn adjust_color_row(&mut self, forward: bool) {
+        self.palette.adjust(self.color_row, forward);
+        self.color_row = self.color_row.min(self.palette.row_count() - 1);
+    }
+
+    /// The color choice to announce on screen right after the user confirmed it.
+    pub fn color_notice(&self) -> Option<String> {
+        (self.tick_counter < self.color_notice_until).then(|| self.palette.describe())
+    }
+
     /// The sensitivity to announce on screen right after the user changed it.
     pub fn gain_notice(&self) -> Option<f32> {
         (self.tick_counter < self.gain_notice_until).then_some(self.gain)
@@ -306,6 +362,44 @@ mod tests {
         let mut app = App::default();
         app.set_terminal_width(width);
         app
+    }
+
+    #[test]
+    fn test_color_popup_cancel_restores_the_palette() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.adjust_color_row(true);
+        assert!(app.palette.single_mode);
+        app.close_color_popup(false);
+        assert_eq!(app.palette, Palette::default());
+        assert_eq!(app.color_notice(), None);
+    }
+
+    #[test]
+    fn test_color_popup_confirm_keeps_the_palette_and_shows_a_notice() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.adjust_color_row(true);
+        app.close_color_popup(true);
+        assert!(app.palette.single_mode);
+        assert_eq!(app.color_notice().as_deref(), Some("Cyan"));
+        for _ in 0..90 {
+            app.tick();
+        }
+        assert_eq!(app.color_notice(), None);
+    }
+
+    #[test]
+    fn test_color_popup_cursor_wraps_and_follows_the_row_count() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.select_prev_color_row();
+        assert_eq!(app.color_row, 3);
+        app.select_next_color_row();
+        assert_eq!(app.color_row, 0);
+        app.adjust_color_row(true);
+        app.select_prev_color_row();
+        assert_eq!(app.color_row, 1);
     }
 
     #[test]
