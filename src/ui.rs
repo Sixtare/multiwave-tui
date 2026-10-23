@@ -415,8 +415,8 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
             let value = match palette.row_color(row) {
                 Some(color) => color_value(color, text_style),
                 None if row == Palette::MIRROR_ROW => {
-                    let mark = if palette.mirror_dimmed { "x" } else { " " };
-                    vec![Span::styled(format!("[{mark}] Darker"), text_style)]
+                    let state = if palette.mirror_dimmed { "on" } else { "off" };
+                    vec![Span::styled(state, text_style)]
                 }
                 None => vec![Span::styled(palette.mode.label(), text_style)],
             };
@@ -1062,22 +1062,22 @@ mod tests {
             .flat_map(|y| (0..80).map(move |x| (x, y)))
             .map(|(x, y)| buffer[(x, y)].symbol().to_string())
             .collect();
-        assert!(text.contains("[ ] Darker"));
+        assert!(text.contains("Mirror off"));
         let color_of = |buffer: &Buffer, word: &str| {
             let line = |y: u16| -> String { (0..80).map(|x| buffer[(x, y)].symbol()).collect() };
             let row = (0..24).find(|&y| line(y).contains(word)).unwrap();
             let x = line(row).split(word).next().unwrap().chars().count() as u16;
             buffer[(x, row)].fg
         };
-        // Off: both the label and the checkbox are yellow. On: green.
+        // Off: both the label and the value are yellow. On: green.
         assert_eq!(color_of(buffer, "Mirror"), Color::Yellow);
-        assert_eq!(color_of(buffer, "Darker"), Color::Yellow);
+        assert_eq!(color_of(buffer, "off"), Color::Yellow);
         app.activate_color_row();
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
         let on = terminal.backend().buffer();
         assert_eq!(color_of(on, "Mirror"), Color::Green);
-        assert_eq!(color_of(on, "Darker"), Color::Green);
+        assert_eq!(color_of(on, "on"), Color::Green);
         app.activate_color_row();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
         // The leftmost mirror cell has the same color as the bar above the divider.

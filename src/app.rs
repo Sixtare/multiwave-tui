@@ -390,12 +390,14 @@ impl App {
     /// Switches the color mode to the next one, or the previous one, when the mode row is
     /// highlighted.
     pub fn change_color_mode(&mut self, forward: bool) {
-        if self.color_row == 0 {
-            self.palette.change_mode(forward);
+        match self.color_row {
+            0 => self.palette.change_mode(forward),
+            Palette::MIRROR_ROW => self.palette.toggle_mirror_dimmed(),
+            _ => {}
         }
     }
 
-    /// Acts on the highlighted row: flips the mirror checkbox, or opens the color picker for a
+    /// Acts on the highlighted row: flips the mirror selector, or opens the color picker for a
     /// color row. The mode row is changed with the arrows instead.
     pub fn activate_color_row(&mut self) {
         match self.color_row {
