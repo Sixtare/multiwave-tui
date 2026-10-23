@@ -289,7 +289,8 @@ const PICKER_HEIGHT: u16 = SQUARE_ROWS as u16 + 2 + 2;
 fn render_menu(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let width = MENU_WIDTH.min(area.width);
-    let height = (MENU_ROWS as u16 + 2).min(area.height);
+    // One extra line holds the `shortcuts` header above the shortcut column.
+    let height = (MENU_ROWS as u16 + 3).min(area.height);
     let menu_area = area.centered(Constraint::Length(width), Constraint::Length(height));
     if menu_area.width < 3 || menu_area.height < 3 {
         return;
@@ -315,31 +316,32 @@ fn render_menu(frame: &mut Frame, app: &App) {
             "S",
         ),
     ];
-    let lines: Vec<Line> = rows
-        .iter()
-        .enumerate()
-        .map(|(row, (label, value, shortcut))| {
-            let selected = row == app.menu_row;
-            let style = if selected {
-                Style::default().fg(Color::Cyan).bold()
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let left = format!(
-                "{} {:<14}{}",
-                if selected { ">" } else { " " },
-                label,
-                value
-            );
-            let pad = (inner.width as usize)
-                .saturating_sub(left.chars().count() + shortcut.chars().count() + 1);
-            Line::from(vec![
-                Span::styled(left, style),
-                Span::raw(" ".repeat(pad)),
-                Span::styled(*shortcut, Style::default().fg(Color::DarkGray)),
-            ])
-        })
-        .collect();
+    let mut lines: Vec<Line> = vec![Line::from("shortcuts ").right_aligned()];
+    lines.extend(
+        rows.iter()
+            .enumerate()
+            .map(|(row, (label, value, shortcut))| {
+                let selected = row == app.menu_row;
+                let style = if selected {
+                    Style::default().fg(Color::Cyan).bold()
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let left = format!(
+                    "{} {:<14}{}",
+                    if selected { ">" } else { " " },
+                    label,
+                    value
+                );
+                let pad = (inner.width as usize)
+                    .saturating_sub(left.chars().count() + shortcut.chars().count() + 1);
+                Line::from(vec![
+                    Span::styled(left, style),
+                    Span::raw(" ".repeat(pad)),
+                    Span::raw(*shortcut),
+                ])
+            }),
+    );
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
