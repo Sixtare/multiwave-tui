@@ -114,9 +114,9 @@ impl ColorMode {
     /// The mode after this one in the picker's order.
     pub fn next(self) -> ColorMode {
         match self {
-            ColorMode::Bands => ColorMode::Gradient,
-            ColorMode::Gradient => ColorMode::Single,
-            ColorMode::Single => ColorMode::Bands,
+            ColorMode::Single => ColorMode::Gradient,
+            ColorMode::Gradient => ColorMode::Bands,
+            ColorMode::Bands => ColorMode::Single,
         }
     }
 
@@ -144,7 +144,7 @@ pub struct Palette {
 impl Default for Palette {
     fn default() -> Self {
         Self {
-            mode: ColorMode::Bands,
+            mode: ColorMode::Single,
             bands: [BarColor::CYAN, BarColor::GREEN, BarColor::MAGENTA],
             mirror_dimmed: true,
         }
@@ -269,9 +269,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_keeps_the_cyan_green_magenta_bands() {
+    fn test_default_is_single_color_cyan() {
         let palette = Palette::default();
-        assert_eq!(palette.mode, ColorMode::Bands);
+        assert_eq!(palette.mode, ColorMode::Single);
+        assert_eq!(
+            palette.bands,
+            [BarColor::CYAN, BarColor::GREEN, BarColor::MAGENTA]
+        );
+        for bar in [0, 15, 31] {
+            assert_eq!(palette.bar_color(bar, 32), BarColor::CYAN);
+        }
+    }
+
+    #[test]
+    fn test_bands_use_one_flat_color_per_third() {
+        let palette = Palette {
+            mode: ColorMode::Bands,
+            ..Palette::default()
+        };
         let colors: Vec<BarColor> = [0, 9, 10, 20, 21, 31]
             .iter()
             .map(|&bar| palette.bar_color(bar, 32))
@@ -339,7 +354,10 @@ mod tests {
 
     #[test]
     fn test_set_row_color_edits_the_band() {
-        let mut palette = Palette::default();
+        let mut palette = Palette {
+            mode: ColorMode::Bands,
+            ..Palette::default()
+        };
         palette.set_row_color(2, BarColor::rgb(1, 2, 3));
         palette.set_row_color(3, BarColor::rgb(4, 5, 6));
         palette.set_row_color(0, BarColor::rgb(7, 8, 9));
@@ -349,14 +367,15 @@ mod tests {
     }
 
     #[test]
-    fn test_mode_cycles_bands_gradient_single() {
+    fn test_mode_cycles_single_gradient_bands() {
         let mut palette = Palette::default();
+        assert_eq!(palette.mode, ColorMode::Single);
         palette.next_mode();
         assert_eq!(palette.mode, ColorMode::Gradient);
         palette.next_mode();
-        assert_eq!(palette.mode, ColorMode::Single);
-        palette.next_mode();
         assert_eq!(palette.mode, ColorMode::Bands);
+        palette.next_mode();
+        assert_eq!(palette.mode, ColorMode::Single);
     }
 
     #[test]
@@ -472,8 +491,11 @@ mod tests {
 
     #[test]
     fn test_row_color_is_none_for_the_mode_row() {
-        let palette = Palette::default();
+        let mut palette = Palette::default();
         assert_eq!(palette.row_color(0), None);
+        // By default the mids and treble follow the bass.
+        assert_eq!(palette.row_color(3), Some(BarColor::CYAN));
+        palette.mode = ColorMode::Bands;
         assert_eq!(palette.row_color(3), Some(BarColor::MAGENTA));
     }
 }

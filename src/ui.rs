@@ -605,7 +605,11 @@ mod tests {
 
     #[test]
     fn test_soundwave_clips_treble_on_narrow_terminal() {
-        let buffer = render_bars(&[1.0; 32], 40, 7);
+        let bands = Palette {
+            mode: ColorMode::Bands,
+            ..Palette::default()
+        };
+        let buffer = render_bars_with(&[1.0; 32], 40, 7, &bands);
 
         assert_eq!(buffer[(0, 0)].fg, Color::Rgb(0, 255, 255));
         assert_eq!(buffer[(39, 0)].fg, Color::Rgb(0, 205, 0));
@@ -747,8 +751,6 @@ mod tests {
     fn test_color_popup_previews_on_the_bars_and_is_drawn_over_them() {
         let mut app = App::new();
         app.open_color_popup();
-        app.activate_color_row();
-        app.activate_color_row();
         app.update_audio_bars(vec![1.0; 32]);
         app.tick();
 
@@ -922,7 +924,6 @@ mod tests {
         let mut app = App::new();
         app.open_color_popup();
         app.activate_color_row();
-        app.activate_color_row();
         app.close_color_popup();
 
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
@@ -930,10 +931,10 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         let top_row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
-        assert!(top_row.ends_with(" color: #00FFFF "), "{top_row:?}");
+        assert!(top_row.ends_with(" color: Gradient "), "{top_row:?}");
         assert_eq!(
             FrameState::capture(&app, SIZE).color_notice.as_deref(),
-            Some("#00FFFF")
+            Some("Gradient")
         );
     }
 

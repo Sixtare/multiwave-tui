@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(app.color_notice(), None);
 
         app.close_color_popup();
-        assert_eq!(app.color_notice().as_deref(), Some("Bands"));
+        assert_eq!(app.color_notice(), Some(picked.hex()));
         for _ in 0..90 {
             app.tick();
         }
@@ -452,21 +452,27 @@ mod tests {
     }
 
     #[test]
-    fn test_mode_row_toggles_and_cursor_follows_the_row_count() {
+    fn test_mode_row_cycles_and_cursor_follows_the_selectable_rows() {
         let mut app = App::new();
+        assert_eq!(app.palette.mode, ColorMode::Single);
         app.open_color_popup();
         app.select_prev_color_row();
         assert_eq!(app.color_row, 4);
         app.select_next_color_row();
         assert_eq!(app.color_row, 0);
+        // Single color skips the mids and treble rows.
+        app.select_next_color_row();
+        app.select_next_color_row();
+        assert_eq!(app.color_row, 4);
+        app.select_next_color_row();
+
         app.activate_color_row();
-        app.activate_color_row();
-        assert_eq!(app.palette.mode, ColorMode::Single);
+        assert_eq!(app.palette.mode, ColorMode::Gradient);
         assert_eq!(app.color_picker, None);
         app.select_prev_color_row();
         assert_eq!(app.color_row, 4);
         app.select_prev_color_row();
-        assert_eq!(app.color_row, 1);
+        assert_eq!(app.color_row, 3);
     }
 
     #[test]
