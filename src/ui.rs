@@ -86,7 +86,7 @@ fn render_bar_notice(frame: &mut Frame, count: usize) {
 
     frame.render_widget(Clear, notice_area);
     frame.render_widget(
-        Paragraph::new(Line::styled(text, Style::default().fg(Color::DarkGray))),
+        Paragraph::new(Line::styled(text, Style::default().fg(Color::Cyan))),
         notice_area,
     );
 }
@@ -422,6 +422,19 @@ mod tests {
         let top_row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
         assert!(top_row.ends_with(" 64 bars "), "{top_row:?}");
         assert!(top_row.starts_with(' '));
+    }
+
+    #[test]
+    fn test_bar_notice_is_cyan_text_without_a_background() {
+        let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
+        terminal.draw(|frame| render_bar_notice(frame, 64)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        for x in 31..40 {
+            let cell = &buffer[(x, 0)];
+            assert_eq!(cell.fg, Color::Cyan, "column {x}");
+            assert_eq!(cell.bg, Color::Reset, "column {x}");
+        }
     }
 
     #[test]
