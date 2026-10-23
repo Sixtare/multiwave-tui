@@ -10,7 +10,11 @@ pub const COLUMNS_PER_BAR: usize = 2;
 pub const MIN_GAIN: f32 = 0.1;
 pub const MAX_GAIN: f32 = 5.0;
 const GAIN_STEP: f32 = 0.10;
-/// How long a bar count or sensitivity notice stays on screen, in ticks (~1.5 s at 60 FPS).
+/// Bar response with smoothing off: fast on both ways, applied on every audio frame and tick.
+const PLAIN_ATTACK_FACTOR: f32 = 0.65;
+const PLAIN_DECAY_FACTOR: f32 = 0.20;
+/// How long a bar count, sensitivity or smoothing notice stays on screen, in ticks (~1.5 s at
+/// 60 FPS).
 const NOTICE_TICKS: u64 = 90;
 
 #[derive(Debug)]
@@ -30,6 +34,8 @@ pub struct App {
     bar_notice_until: u64,
     /// Tick until which the sensitivity notice is shown.
     gain_notice_until: u64,
+    /// Tick until which the smoothing notice is shown.
+    smoothing_notice_until: u64,
     /// Vector containing normalized and smoothed audio bar magnitudes (0.0 to 1.0).
     pub audio_bars: Vec<f32>,
     /// Vector containing the target values most recently received from the FFT.
@@ -37,9 +43,12 @@ pub struct App {
     /// Manual sensitivity multiplier, applied by the audio processor on top of its automatic
     /// sensitivity.
     pub gain: f32,
-    /// Attack factor: fast and damped rising response.
+    /// Whether smoothing is on: slower, per-tick bar motion plus the audio processor's treble
+    /// power averaging. Off by default.
+    pub smoothing: bool,
+    /// Attack factor with smoothing on: fast and damped rising response.
     pub attack_factor: f32,
-    /// Decay factor: gradual and fluid falling response.
+    /// Decay factor with smoothing on: gradual and fluid falling response.
     pub decay_factor: f32,
     /// Whether to display the output device selection popup.
     pub show_popup: bool,
@@ -65,11 +74,13 @@ impl Default for App {
             bar_count: MIN_BARS,
             bar_notice_until: 0,
             gain_notice_until: 0,
+            smoothing_notice_until: 0,
             audio_bars: vec![0.0; MIN_BARS],
             target_bars: vec![0.0; MIN_BARS],
             gain: 1.0,
-            attack_factor: 0.65,
-            decay_factor: 0.20,
+            smoothing: false,
+            attack_factor: 0.40,
+            decay_factor: 0.12,
             show_popup: false,
             devices: Vec::new(),
             selected_device_idx: 0,
@@ -214,19 +225,27 @@ impl App {
         }
 
         self.target_bars = bars;
-        self.apply_smoothing();
+        // With smoothing on the bars only move on ticks, so the motion stays continuous.
+        if !self.smoothing {
+            self.apply_smoothing();
+        }
     }
 
-    /// Applies smooth interpolation (Attack / Decay) to prevent abrupt visual jumps.
+    /// Moves every bar towards its target: quickly up (attack), more slowly down (decay).
+    ///
+    /// With smoothing on it runs once per tick only, so the motion is continuous and does not
+    /// depend on the audio frame rate. Falling slower than rising is what keeps a bar that dips
+    /// and rises again within a few frames from flickering, without holding it still. With
+    /// smoothing off it also runs on every audio frame, with the faster plain factors.
     pub fn apply_smoothing(&mut self) {
-        for (current, &target) in self.audio_bars.iter_mut().zip(self.target_bars.iter()) {
-            if target > *current {
-                // Attack: fast interpolation towards the target
-                *current += (target - *current) * self.attack_factor;
-            } else {
-                // Decay: gradual and elastic falling decay
-                *current -= (*current - target) * self.decay_factor;
-            }
+        let (attack, decay) = if self.smoothing {
+            (self.attack_factor, self.decay_factor)
+        } else {
+            (PLAIN_ATTACK_FACTOR, PLAIN_DECAY_FACTOR)
+        };
+        for (current, &target) in self.audio_bars.iter_mut().zip(&self.target_bars) {
+            let factor = if target > *current { attack } else { decay };
+            *current += (target - *current) * factor;
 
             if *current < 0.005 {
                 *current = 0.0;
@@ -246,6 +265,17 @@ impl App {
     pub fn decrease_gain(&mut self) {
         self.gain = round_gain((self.gain - GAIN_STEP).max(MIN_GAIN));
         self.gain_notice_until = self.tick_counter + NOTICE_TICKS;
+    }
+
+    /// Turns smoothing on or off.
+    pub fn toggle_smoothing(&mut self) {
+        self.smoothing = !self.smoothing;
+        self.smoothing_notice_until = self.tick_counter + NOTICE_TICKS;
+    }
+
+    /// The smoothing state to announce on screen right after the user toggled it.
+    pub fn smoothing_notice(&self) -> Option<bool> {
+        (self.tick_counter < self.smoothing_notice_until).then_some(self.smoothing)
     }
 
     /// The sensitivity to announce on screen right after the user changed it.
@@ -429,11 +459,102 @@ mod tests {
 
         let new_bars = vec![1.0; 32];
         app.update_audio_bars(new_bars);
-        assert!(app.audio_bars[0] > 0.5 && app.audio_bars[0] < 1.0);
+        app.tick();
+        let risen = app.audio_bars[0];
+        assert!(risen > 0.2 && risen < 1.0);
 
         let zero_bars = vec![0.0; 32];
         app.update_audio_bars(zero_bars);
-        assert!(app.audio_bars[0] > 0.0);
+        app.tick();
+        assert!(app.audio_bars[0] > 0.0 && app.audio_bars[0] < risen);
+    }
+
+    #[test]
+    fn test_smoothing_is_off_by_default_and_bars_react_to_each_audio_frame() {
+        let mut app = App::default();
+        assert!(!app.smoothing);
+
+        app.update_audio_bars(vec![1.0; 32]);
+
+        // The plain response moves the bars right away, without waiting for a tick.
+        assert!(app.audio_bars[0] > 0.6);
+    }
+
+    #[test]
+    fn test_smoothing_notice_shows_after_a_toggle_then_expires() {
+        let mut app = App::default();
+        assert_eq!(app.smoothing_notice(), None);
+
+        app.toggle_smoothing();
+        assert_eq!(app.smoothing_notice(), Some(true));
+
+        for _ in 0..NOTICE_TICKS {
+            app.tick();
+        }
+        assert_eq!(app.smoothing_notice(), None);
+
+        app.toggle_smoothing();
+        assert_eq!(app.smoothing_notice(), Some(false));
+    }
+
+    #[test]
+    fn test_bars_move_a_little_on_every_tick() {
+        let mut app = App {
+            smoothing: true,
+            ..App::default()
+        };
+        app.update_audio_bars(vec![1.0; 32]);
+
+        let mut previous = app.audio_bars[0];
+        for _ in 0..5 {
+            app.tick();
+            assert!(app.audio_bars[0] > previous);
+            previous = app.audio_bars[0];
+        }
+    }
+
+    #[test]
+    fn test_a_bar_falls_slower_than_it_rises() {
+        let mut up = App {
+            smoothing: true,
+            ..App::default()
+        };
+        up.update_audio_bars(vec![1.0; 32]);
+        up.tick();
+
+        let mut down = App {
+            smoothing: true,
+            audio_bars: vec![1.0; 32],
+            ..App::default()
+        };
+        down.update_audio_bars(vec![0.0; 32]);
+        down.tick();
+
+        assert!(1.0 - down.audio_bars[0] < up.audio_bars[0]);
+    }
+
+    #[test]
+    fn test_a_brief_dip_barely_moves_the_bar() {
+        let mut steady = App {
+            smoothing: true,
+            audio_bars: vec![0.8; 32],
+            ..App::default()
+        };
+        let mut dipping = App {
+            smoothing: true,
+            audio_bars: vec![0.8; 32],
+            ..App::default()
+        };
+
+        // A 0.8 level where one frame in three drops to 0.3.
+        for tick in 0..30 {
+            steady.update_audio_bars(vec![0.8; 32]);
+            dipping.update_audio_bars(vec![if tick % 3 == 1 { 0.3 } else { 0.8 }; 32]);
+            steady.tick();
+            dipping.tick();
+        }
+
+        assert!((steady.audio_bars[0] - dipping.audio_bars[0]).abs() < 0.1);
     }
 
     #[test]

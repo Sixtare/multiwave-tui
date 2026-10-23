@@ -14,6 +14,8 @@ pub enum AppAction {
     SetBarCount(usize),
     /// Make the running capture apply this manual sensitivity.
     SetGain(f32),
+    /// Make the running capture smooth (or not) the treble bars.
+    SetSmoothing(bool),
     /// Rebuild capture after the audio callback reported a lost or invalidated stream.
     RecoverLostDevice,
     /// Check whether the default output or device list changed (rate-limited by `SoundDevice`).
@@ -38,6 +40,7 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
     let has_tick = batch.has_tick();
     let bar_count_before = app.bar_count;
     let gain_before = app.gain;
+    let smoothing_before = app.smoothing;
 
     // Applied first so keys and audio frames in the same batch see the new terminal width.
     if let Some(width) = batch.latest_width {
@@ -74,6 +77,10 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
         outcome.actions.push(AppAction::SetGain(app.gain));
     }
 
+    if app.smoothing != smoothing_before {
+        outcome.actions.push(AppAction::SetSmoothing(app.smoothing));
+    }
+
     for _ in 0..batch.ticks {
         app.tick();
     }
@@ -89,7 +96,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
     // If the device selection popup is open, handle navigation and confirmation
     if app.show_popup {
         match key_event.code {
-            KeyCode::Esc | KeyCode::Char('s') => {
+            KeyCode::Esc => {
                 app.show_popup = false;
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -115,13 +122,14 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
 
     // Default keyboard navigation when popup is closed
     match key_event.code {
-        KeyCode::Esc | KeyCode::Char('q') => app.quit(),
+        KeyCode::Char('q') => app.quit(),
         KeyCode::Char('c') | KeyCode::Char('C') if key_event.modifiers == KeyModifiers::CONTROL => {
             app.quit()
         }
-        KeyCode::Char('s') => {
+        KeyCode::Esc => {
             app.show_popup = true;
         }
+        KeyCode::Char('s') => app.toggle_smoothing(),
         KeyCode::Right | KeyCode::Char('l') => app.increase_bar_count(),
         KeyCode::Left | KeyCode::Char('j') => app.decrease_bar_count(),
         KeyCode::Up | KeyCode::Char('i') => app.increase_gain(),
@@ -210,7 +218,7 @@ mod tests {
             &mut app,
             batch_of(vec![
                 Event::AudioDeviceLost,
-                key(KeyCode::Char('s')),
+                key(KeyCode::Esc),
                 key(KeyCode::Down),
                 key(KeyCode::Enter),
             ]),
@@ -220,6 +228,51 @@ mod tests {
             outcome.actions,
             vec![AppAction::RecoverLostDevice, AppAction::ChangeDevice(1)]
         );
+    }
+
+    #[test]
+    fn test_s_toggles_smoothing_and_reports_it_once() {
+        let mut app = App::default();
+        assert!(!app.smoothing);
+
+        let outcome = apply_batch(&mut app, batch_of(vec![key(KeyCode::Char('s'))]));
+        assert!(app.smoothing);
+        assert_eq!(outcome.actions, vec![AppAction::SetSmoothing(true)]);
+
+        let outcome = apply_batch(
+            &mut app,
+            batch_of(vec![key(KeyCode::Char('s')), key(KeyCode::Char('s'))]),
+        );
+        assert!(app.smoothing);
+        assert!(outcome.actions.is_empty());
+
+        let outcome = apply_batch(&mut app, batch_of(vec![key(KeyCode::Char('s'))]));
+        assert!(!app.smoothing);
+        assert_eq!(outcome.actions, vec![AppAction::SetSmoothing(false)]);
+    }
+
+    #[test]
+    fn test_esc_opens_and_closes_the_popup_and_q_quits() {
+        let mut app = App::with_devices(vec!["A".into()], 0);
+
+        update(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.show_popup && !app.should_quit);
+
+        // `s` is swallowed while the popup is open.
+        update(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        );
+        assert!(app.show_popup && !app.smoothing);
+
+        update(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.show_popup && !app.should_quit);
+
+        update(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        );
+        assert!(app.should_quit);
     }
 
     #[test]

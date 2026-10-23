@@ -35,6 +35,11 @@ const TILT_PIVOT_HZ: f32 = 1000.0;
 /// it is left for transients and for the manual sensitivity, so loud music doesn't fill the screen.
 const PEAK_TARGET_HEIGHT: f32 = 0.75;
 
+/// Time constant, in seconds, of the smoothing applied to the treble bars' power. The short FFT
+/// gives independent, noisy frames, so without it the mids and highs jitter far more than the
+/// bass, whose long overlapping FFT already averages over time.
+const TREBLE_SMOOTHING_SECONDS: f32 = 0.04;
+
 /// A frame whose loudest sample is below this (about -80 dBFS) counts as silence.
 const SILENCE_PEAK: f32 = 1e-4;
 /// Automatic sensitivity: how fast it drops when a bar overshoots and rises when none does.
@@ -246,6 +251,12 @@ pub struct AudioProcessor {
     /// The user's manual sensitivity, applied on top of the automatic one.
     manual_gain: f32,
     frames_per_second: f32,
+    /// Smoothed power (squared magnitude) of every bar; only the treble bars use it.
+    smoothed_power: Vec<f32>,
+    /// Whether `smoothed_power` holds real values yet; the first frame seeds it.
+    smoothing_seeded: bool,
+    /// Whether the treble bars are smoothed over time; off by default.
+    smoothing: bool,
 }
 
 impl AudioProcessor {
@@ -285,6 +296,9 @@ impl AudioProcessor {
             has_overshot: false,
             manual_gain: 1.0,
             frames_per_second: sample_rate as f32 / FFT_SIZE as f32,
+            smoothed_power: vec![0.0; num_bars],
+            smoothing_seeded: false,
+            smoothing: false,
         }
     }
 
@@ -301,6 +315,16 @@ impl AudioProcessor {
 
         self.num_bars = num_bars;
         self.layout = BandLayout::new(self.sample_rate, num_bars, self.extra_slope_db_per_oct);
+        self.smoothed_power = vec![0.0; num_bars];
+        self.smoothing_seeded = false;
+    }
+
+    /// Turns the treble power smoothing on or off. Turning it on starts from the next frame.
+    pub fn set_smoothing(&mut self, on: bool) {
+        if on != self.smoothing {
+            self.smoothing = on;
+            self.smoothing_seeded = false;
+        }
     }
 
     /// Sets the user's manual sensitivity multiplier (1.0 leaves the levels unchanged).
@@ -354,8 +378,9 @@ impl AudioProcessor {
         let manual_offset = 20.0 * self.manual_gain.log10() / DB_WINDOW;
         let mut overshoot = false;
         let mut bars = Vec::with_capacity(self.num_bars);
+        let smoothing = 1.0 - (-1.0 / (self.frames_per_second * TREBLE_SMOOTHING_SECONDS)).exp();
 
-        for bar in &self.layout.bars {
+        for (index, bar) in self.layout.bars.iter().enumerate() {
             let magnitudes = match bar.band {
                 Band::Bass => &self.bass.magnitudes,
                 Band::Treble => &self.treble.magnitudes,
@@ -371,12 +396,29 @@ impl AudioProcessor {
                 0.5 * average + 0.5 * max
             };
 
+            let magnitude = match bar.band {
+                Band::Bass => magnitude,
+                Band::Treble if !self.smoothing => magnitude,
+                Band::Treble => {
+                    // Averaging power keeps the mean level of noise unchanged while it evens
+                    // out the frame-to-frame jitter.
+                    let power = &mut self.smoothed_power[index];
+                    if self.smoothing_seeded {
+                        *power += (magnitude * magnitude - *power) * smoothing;
+                    } else {
+                        *power = magnitude * magnitude;
+                    }
+                    power.sqrt()
+                }
+            };
+
             let level = magnitude * bar.gain() * self.sensitivity;
             let height = level_to_height(level);
             overshoot |= height > PEAK_TARGET_HEIGHT;
             bars.push((height + manual_offset).clamp(0.0, 1.0));
         }
 
+        self.smoothing_seeded = true;
         self.adapt_sensitivity(overshoot, peak < SILENCE_PEAK);
         bars
     }
@@ -710,7 +752,7 @@ mod tests {
         assert!(after_loud < 0.7, "{after_loud}");
 
         // Music gets quieter: the climb back is far slower than the drop was.
-        let quiet = sine(10_000.0, 0.001, FFT_SIZE * 40);
+        let quiet = sine(10_000.0, 0.001, FFT_SIZE * 100);
         processor.process_interleaved_samples(&quiet);
         let after_quiet = processor.sensitivity();
         assert!(after_quiet > after_loud);
@@ -773,6 +815,8 @@ mod tests {
         let mut processor = AudioProcessor::new(1, SAMPLE_RATE, 32);
         processor.process_interleaved_samples(&sine(10_000.0, 1.0, FFT_SIZE * 10));
         assert!(processor.has_overshot);
+        // Let the smoothed loud tone fade out first; its tail still counts as overshoot.
+        processor.process_interleaved_samples(&pink_noise(FFT_SIZE * 10, 0.001));
         let before = processor.sensitivity();
 
         processor.process_interleaved_samples(&pink_noise(FFT_SIZE * 47, 0.001));
@@ -844,5 +888,67 @@ mod tests {
         assert_eq!(processor.downmix_frame(&frame), 0.5);
         assert_eq!(processor.downmix_frame(&[0.25]), 0.25);
         assert_eq!(processor.downmix_frame(&[]), 0.0);
+    }
+
+    /// Mean absolute change, in dB, from one frame to the next for the bar at `index`.
+    fn frame_to_frame_db(frames: &[Vec<f32>], index: usize) -> f32 {
+        let values: Vec<f32> = frames
+            .iter()
+            .map(|frame| frame[index] * DB_WINDOW)
+            .collect();
+        values.windows(2).map(|w| (w[1] - w[0]).abs()).sum::<f32>() / (values.len() - 1) as f32
+    }
+
+    #[test]
+    fn test_treble_bars_jitter_little_from_frame_to_frame() {
+        let mut processor = processor_without_agc(128, EXTRA_SLOPE_DB_PER_OCT);
+        processor.set_smoothing(true);
+        let frames =
+            processor.process_interleaved_samples(&pink_noise(SAMPLE_RATE as usize * 10, 0.05));
+        let frames = &frames[20..];
+
+        // Without smoothing the mids moved 3 to 4 dB per frame (the bass about 1 dB).
+        for index in [40, 56, 72, 88] {
+            let jitter = frame_to_frame_db(frames, index);
+            assert!(jitter < 2.5, "bar {index}: {jitter} dB");
+        }
+    }
+
+    #[test]
+    fn test_treble_bars_are_not_smoothed_by_default() {
+        let mut plain = processor_without_agc(128, EXTRA_SLOPE_DB_PER_OCT);
+        let mut smoothed = processor_without_agc(128, EXTRA_SLOPE_DB_PER_OCT);
+        smoothed.set_smoothing(true);
+        let samples = pink_noise(SAMPLE_RATE as usize * 10, 0.05);
+
+        let plain_frames = plain.process_interleaved_samples(&samples);
+        let smoothed_frames = smoothed.process_interleaved_samples(&samples);
+
+        let plain_jitter = frame_to_frame_db(&plain_frames[20..], 56);
+        let smoothed_jitter = frame_to_frame_db(&smoothed_frames[20..], 56);
+        assert!(plain_jitter > 1.3 * smoothed_jitter);
+    }
+
+    #[test]
+    fn test_treble_smoothing_keeps_the_mean_level_of_noise() {
+        let samples = pink_noise(SAMPLE_RATE as usize * 6, 0.05);
+        let mut processor = processor_without_agc(64, 0.0);
+        processor.set_smoothing(true);
+        let levels = mean_levels_db(&mut processor, &samples);
+
+        let spread = spread(&levels);
+        assert!(spread < 3.5, "{spread}");
+    }
+
+    #[test]
+    fn test_treble_tone_onset_still_shows_within_a_few_frames() {
+        let mut processor = processor_without_agc(64, EXTRA_SLOPE_DB_PER_OCT);
+        processor.set_smoothing(true);
+        processor.process_interleaved_samples(&vec![0.0; FFT_SIZE * 10]);
+
+        let frames = processor.process_interleaved_samples(&sine(5000.0, 0.3, FFT_SIZE * 8));
+
+        let loudest = |frame: &Vec<f32>| frame.iter().cloned().fold(0.0, f32::max);
+        assert!(loudest(&frames[3]) > 0.8 * loudest(&frames[7]));
     }
 }
