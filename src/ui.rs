@@ -29,6 +29,8 @@ pub struct FrameState {
     audio_error: Option<String>,
     /// Bar count announcement, while it is on screen.
     bar_notice: Option<usize>,
+    /// Sensitivity announcement, while it is on screen.
+    gain_notice: Option<f32>,
 }
 
 impl FrameState {
@@ -48,6 +50,7 @@ impl FrameState {
             device_scroll_offset: app.device_scroll_offset,
             audio_error: app.audio_error.clone(),
             bar_notice: app.bar_notice().filter(|_| !app.show_popup),
+            gain_notice: app.gain_notice().filter(|_| !app.show_popup),
         }
     }
 }
@@ -59,8 +62,14 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         true => render_popup(frame, app),
     }
 
+    // Notices stack down the top-right corner, so changing both settings at once shows both.
+    let mut notice_row = 0;
     if let Some(count) = app.bar_notice().filter(|_| !app.show_popup) {
-        render_bar_notice(frame, count);
+        render_notice(frame, notice_row, &format!(" {count} bars "));
+        notice_row += 1;
+    }
+    if let Some(gain) = app.gain_notice().filter(|_| !app.show_popup) {
+        render_notice(frame, notice_row, &format!(" sensitivity {gain:.2}x "));
     }
 
     if let Some(error) = &app.audio_error {
@@ -68,25 +77,28 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     }
 }
 
-/// Draws the bar count in the top-right corner, e.g. ` 64 bars `.
-fn render_bar_notice(frame: &mut Frame, count: usize) {
+/// Draws a short notice in cyan, right-aligned on `row` (counted from the top of the frame),
+/// e.g. ` 64 bars ` or ` sensitivity 2.50x `.
+fn render_notice(frame: &mut Frame, row: u16, text: &str) {
     let area = frame.area();
-    let text = format!(" {count} bars ");
     let width = (text.chars().count() as u16).min(area.width);
-    if width == 0 || area.height == 0 {
+    if width == 0 || row >= area.height {
         return;
     }
 
     let notice_area = Rect {
         x: area.x + area.width - width,
-        y: area.y,
+        y: area.y + row,
         width,
         height: 1,
     };
 
     frame.render_widget(Clear, notice_area);
     frame.render_widget(
-        Paragraph::new(Line::styled(text, Style::default().fg(Color::Cyan))),
+        Paragraph::new(Line::styled(
+            text.to_string(),
+            Style::default().fg(Color::Cyan),
+        )),
         notice_area,
     );
 }
@@ -416,7 +428,9 @@ mod tests {
     #[test]
     fn test_bar_notice_is_drawn_in_the_top_right_corner() {
         let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
-        terminal.draw(|frame| render_bar_notice(frame, 64)).unwrap();
+        terminal
+            .draw(|frame| render_notice(frame, 0, " 64 bars "))
+            .unwrap();
         let buffer = terminal.backend().buffer();
 
         let top_row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
@@ -427,7 +441,9 @@ mod tests {
     #[test]
     fn test_bar_notice_is_cyan_text_without_a_background() {
         let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
-        terminal.draw(|frame| render_bar_notice(frame, 64)).unwrap();
+        terminal
+            .draw(|frame| render_notice(frame, 0, " 64 bars "))
+            .unwrap();
         let buffer = terminal.backend().buffer();
 
         for x in 31..40 {
@@ -435,6 +451,55 @@ mod tests {
             assert_eq!(cell.fg, Color::Cyan, "column {x}");
             assert_eq!(cell.bg, Color::Reset, "column {x}");
         }
+    }
+
+    #[test]
+    fn test_sensitivity_notice_is_drawn_like_the_bar_count_one() {
+        let mut app = App::new();
+        app.increase_gain();
+        app.increase_gain();
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let top_row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
+        assert!(top_row.ends_with(" sensitivity 1.50x "), "{top_row:?}");
+        assert_eq!(buffer[(39, 0)].fg, Color::Cyan);
+        assert_eq!(buffer[(39, 0)].bg, Color::Reset);
+    }
+
+    #[test]
+    fn test_both_notices_stack_in_the_top_right_corner() {
+        let mut app = App::new();
+        app.set_terminal_width(40);
+        app.increase_bar_count();
+        app.increase_gain();
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let row = |y: u16| -> String { (0..40).map(|x| buffer[(x, y)].symbol()).collect() };
+        assert!(row(0).ends_with(" 32 bars "), "{:?}", row(0));
+        assert!(row(1).ends_with(" sensitivity 1.25x "), "{:?}", row(1));
+    }
+
+    #[test]
+    fn test_frame_state_changes_while_the_sensitivity_notice_is_visible() {
+        let mut app = App::new();
+        let before = FrameState::capture(&app, SIZE);
+
+        app.increase_gain();
+        let during = FrameState::capture(&app, SIZE);
+        assert_ne!(before, during);
+
+        for _ in 0..90 {
+            app.tick();
+        }
+        let after = FrameState::capture(&app, SIZE);
+        assert_ne!(during, after);
+        assert_eq!(after.gain_notice, None);
     }
 
     #[test]

@@ -6,8 +6,12 @@ pub const MAX_BARS: usize = 256;
 pub const BAR_STEP: usize = 8;
 /// Terminal columns used by one bar: its glyph plus a spacer.
 pub const COLUMNS_PER_BAR: usize = 2;
-/// How long the bar count notice stays on screen, in ticks (~1.5 s at 60 FPS).
-const BAR_NOTICE_TICKS: u64 = 90;
+/// Lowest and highest sensitivity (gain) multiplier, and how much each key press changes it.
+pub const MIN_GAIN: f32 = 0.1;
+pub const MAX_GAIN: f32 = 20.0;
+const GAIN_STEP: f32 = 0.25;
+/// How long a bar count or sensitivity notice stays on screen, in ticks (~1.5 s at 60 FPS).
+const NOTICE_TICKS: u64 = 90;
 
 #[derive(Debug)]
 pub struct App {
@@ -24,6 +28,8 @@ pub struct App {
     pub bar_count: usize,
     /// Tick until which the bar count notice is shown.
     bar_notice_until: u64,
+    /// Tick until which the sensitivity notice is shown.
+    gain_notice_until: u64,
     /// Vector containing normalized and smoothed audio bar magnitudes (0.0 to 1.0).
     pub audio_bars: Vec<f32>,
     /// Vector containing the target values most recently received from the FFT.
@@ -57,6 +63,7 @@ impl Default for App {
             chosen_bar_count: MIN_BARS,
             bar_count: MIN_BARS,
             bar_notice_until: 0,
+            gain_notice_until: 0,
             audio_bars: vec![0.0; MIN_BARS],
             target_bars: vec![0.0; MIN_BARS],
             gain: 1.0,
@@ -148,7 +155,7 @@ impl App {
             self.chosen_bar_count = target;
             self.sync_bar_count();
         }
-        self.bar_notice_until = self.tick_counter + BAR_NOTICE_TICKS;
+        self.bar_notice_until = self.tick_counter + NOTICE_TICKS;
     }
 
     /// Recomputes the shown bar count and stretches the current bars to the new length, so the
@@ -230,12 +237,19 @@ impl App {
 
     /// Increases visualization sensitivity/gain.
     pub fn increase_gain(&mut self) {
-        self.gain = (self.gain + 0.25).min(10.0);
+        self.gain = (self.gain + GAIN_STEP).min(MAX_GAIN);
+        self.gain_notice_until = self.tick_counter + NOTICE_TICKS;
     }
 
     /// Decreases visualization sensitivity/gain.
     pub fn decrease_gain(&mut self) {
-        self.gain = (self.gain - 0.25).max(0.1);
+        self.gain = (self.gain - GAIN_STEP).max(MIN_GAIN);
+        self.gain_notice_until = self.tick_counter + NOTICE_TICKS;
+    }
+
+    /// The sensitivity to announce on screen right after the user changed it.
+    pub fn gain_notice(&self) -> Option<f32> {
+        (self.tick_counter < self.gain_notice_until).then_some(self.gain)
     }
 
     /// Returns audio bars with the current gain adjustment applied.
@@ -396,7 +410,7 @@ mod tests {
         app.increase_bar_count();
         assert_eq!(app.bar_notice(), Some(40));
 
-        for _ in 0..BAR_NOTICE_TICKS {
+        for _ in 0..NOTICE_TICKS {
             app.tick();
         }
         assert_eq!(app.bar_notice(), None);
@@ -432,6 +446,58 @@ mod tests {
         app.increase_gain();
         assert_eq!(app.gain, 1.25);
         assert_eq!(app.displayed_bars()[0], (0.4_f32 * 1.25).clamp(0.0, 1.0));
+    }
+
+    #[test]
+    fn test_gain_goes_up_to_twenty_and_down_to_a_tenth() {
+        let mut app = App::default();
+        for _ in 0..200 {
+            app.increase_gain();
+        }
+        assert_eq!(app.gain, MAX_GAIN);
+        assert_eq!(MAX_GAIN, 20.0);
+
+        for _ in 0..200 {
+            app.decrease_gain();
+        }
+        assert_eq!(app.gain, MIN_GAIN);
+    }
+
+    #[test]
+    fn test_gain_notice_shows_after_a_change_then_expires() {
+        let mut app = App::default();
+        assert_eq!(app.gain_notice(), None);
+
+        app.increase_gain();
+        assert_eq!(app.gain_notice(), Some(1.25));
+
+        for _ in 0..NOTICE_TICKS {
+            app.tick();
+        }
+        assert_eq!(app.gain_notice(), None);
+    }
+
+    #[test]
+    fn test_gain_notice_also_shows_when_already_at_a_limit() {
+        let mut app = App {
+            gain: MAX_GAIN,
+            ..App::default()
+        };
+        app.increase_gain();
+        assert_eq!(app.gain_notice(), Some(MAX_GAIN));
+    }
+
+    #[test]
+    fn test_gain_and_bar_notices_are_independent() {
+        let mut app = App::default();
+        app.set_terminal_width(200);
+
+        app.increase_gain();
+        assert_eq!(app.bar_notice(), None);
+
+        app.increase_bar_count();
+        assert_eq!(app.bar_notice(), Some(40));
+        assert_eq!(app.gain_notice(), Some(1.25));
     }
 
     #[test]
