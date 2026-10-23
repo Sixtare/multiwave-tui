@@ -39,6 +39,7 @@ pub struct FrameState {
     palette: Palette,
     show_color_popup: bool,
     color_row: usize,
+    color_picker: Option<usize>,
     /// Color announcement, while it is on screen.
     color_notice: Option<String>,
 }
@@ -65,6 +66,7 @@ impl FrameState {
             palette: app.palette,
             show_color_popup: app.show_color_popup,
             color_row: app.color_row,
+            color_picker: app.color_picker,
             color_notice: app.color_notice().filter(|_| !app.show_popup),
         }
     }
@@ -256,13 +258,15 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
     }
 }
 
-/// Draws the bar color picker over the visualizer, which keeps moving as a live preview.
+/// Draws the bar color popup over the visualizer, which keeps moving as a live preview.
+///
+/// While a row's list of colors is open it is drawn in a second box to the right.
 fn render_color_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let palette = &app.palette;
     let height = (palette.row_count() as u16 + 2).min(area.height);
     let popup_area = area.centered(
-        Constraint::Length(46.min(area.width)),
+        Constraint::Length(34.min(area.width)),
         Constraint::Length(height),
     );
     if popup_area.width < 3 || popup_area.height < 3 {
@@ -272,7 +276,7 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     let block = Block::bordered()
         .title(" Bar Colors ")
         .title_alignment(Alignment::Center)
-        .title_bottom(Line::from(" ←/→ change  ↑/↓ row  Enter ok  Esc cancel ").centered())
+        .title_bottom(Line::from(" Enter select  Esc close ").centered())
         .border_type(BorderType::Rounded);
     let inner = block.inner(popup_area);
     frame.render_widget(Clear, popup_area);
@@ -308,9 +312,67 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
                 format!("{} {:<7}", if selected { ">" } else { " " }, label),
                 text_style,
             )];
-            spans.push(Span::styled("◀ ", text_style));
             spans.extend(value);
-            spans.push(Span::styled(" ▶", text_style));
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+
+    if let Some(cursor) = app.color_picker {
+        render_color_list(frame, popup_area, app.color_row as u16, cursor);
+    }
+}
+
+/// Draws the list of pickable colors to the right of `popup_area`, or over its right edge when
+/// the terminal has no room beside it. `row` is the popup row being edited.
+fn render_color_list(frame: &mut Frame, popup_area: Rect, row: u16, cursor: usize) {
+    let area = frame.area();
+    let width = 20.min(area.width);
+    let colors = BarColor::ALL;
+    let height = (colors.len() as u16 + 2).min(area.height);
+    // Lined up with the edited row, but kept inside the terminal.
+    let y = (popup_area.y + 1 + row)
+        .saturating_sub(1)
+        .min(area.y + area.height - height);
+    let x = if popup_area.right() + width <= area.right() {
+        popup_area.right()
+    } else {
+        area.right() - width
+    };
+    let list_area = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    if list_area.width < 3 || list_area.height < 3 {
+        return;
+    }
+
+    let block = Block::bordered()
+        .title(" Color ")
+        .title_alignment(Alignment::Center)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(list_area);
+    frame.render_widget(Clear, list_area);
+    frame.render_widget(block, list_area);
+
+    // Scroll so the cursor stays visible on a short terminal.
+    let visible = inner.height as usize;
+    let offset = (cursor + 1).saturating_sub(visible);
+    let lines: Vec<Line> = colors
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(visible)
+        .map(|(i, &color)| {
+            let style = if i == cursor {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let mut spans = vec![Span::styled(if i == cursor { "> " } else { "  " }, style)];
+            spans.extend(color_value(color));
             Line::from(spans)
         })
         .collect();
@@ -615,7 +677,7 @@ mod tests {
     fn test_color_popup_previews_on_the_bars_and_is_drawn_over_them() {
         let mut app = App::new();
         app.open_color_popup();
-        app.adjust_color_row(true);
+        app.activate_color_row();
         app.update_audio_bars(vec![1.0; 32]);
         app.tick();
 
@@ -634,6 +696,29 @@ mod tests {
     }
 
     #[test]
+    fn test_color_list_opens_to_the_right_of_the_popup() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.select_next_color_row();
+        app.activate_color_row();
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let row = |y: u16| -> String { (0..80).map(|x| buffer[(x, y)].symbol()).collect() };
+        let title_row = (0..20).find(|&y| row(y).contains("Bar Colors")).unwrap();
+        let popup_col = row(title_row).find("Bar Colors").unwrap();
+        let list_title_col = (0..20)
+            .filter_map(|y| row(y).find(" Color "))
+            .next()
+            .expect("color list title");
+        assert!(list_title_col > popup_col + 10);
+        let all: String = (0..20).map(row).collect();
+        assert!(all.contains("Gray"));
+    }
+
+    #[test]
     fn test_frame_state_changes_with_the_palette_and_color_popup() {
         let mut app = App::new();
         let before = FrameState::capture(&app, SIZE);
@@ -644,16 +729,19 @@ mod tests {
         app.select_next_color_row();
         let moved = FrameState::capture(&app, SIZE);
         assert_ne!(open, moved);
-        app.adjust_color_row(true);
-        assert_ne!(moved, FrameState::capture(&app, SIZE));
+        app.activate_color_row();
+        let picking = FrameState::capture(&app, SIZE);
+        assert_ne!(moved, picking);
+        app.move_color_picker(true);
+        assert_ne!(picking, FrameState::capture(&app, SIZE));
     }
 
     #[test]
     fn test_color_notice_is_drawn_after_confirming() {
         let mut app = App::new();
         app.open_color_popup();
-        app.adjust_color_row(true);
-        app.close_color_popup(true);
+        app.activate_color_row();
+        app.close_color_popup();
 
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();

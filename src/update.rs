@@ -101,12 +101,23 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             {
                 app.quit();
             }
-            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_popup(false),
-            KeyCode::Enter => app.close_color_popup(true),
+            // While the list of colors is open it takes the keys, and Esc/`c` only close the list.
+            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C')
+                if app.color_picker.is_some() =>
+            {
+                app.close_color_picker(false)
+            }
+            KeyCode::Enter if app.color_picker.is_some() => app.close_color_picker(true),
+            KeyCode::Up | KeyCode::Char('k') if app.color_picker.is_some() => {
+                app.move_color_picker(false)
+            }
+            KeyCode::Down | KeyCode::Char('j') if app.color_picker.is_some() => {
+                app.move_color_picker(true)
+            }
+            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_popup(),
+            KeyCode::Enter => app.activate_color_row(),
             KeyCode::Up | KeyCode::Char('k') => app.select_prev_color_row(),
             KeyCode::Down | KeyCode::Char('j') => app.select_next_color_row(),
-            KeyCode::Left => app.adjust_color_row(false),
-            KeyCode::Right => app.adjust_color_row(true),
             _ => {}
         }
         return None;
@@ -243,31 +254,54 @@ mod tests {
 
         press(&mut app, KeyCode::Char('s'));
         press(&mut app, KeyCode::Char('q'));
+        press(&mut app, KeyCode::Right);
         assert!(!app.smoothing);
         assert!(!app.should_quit);
-
-        press(&mut app, KeyCode::Right);
-        assert!(app.palette.single_mode);
         assert_eq!(app.bar_count, 32);
 
-        press(&mut app, KeyCode::Down);
-        press(&mut app, KeyCode::Right);
-        assert_eq!(app.palette.single, crate::palette::BarColor::Green);
+        // Enter on the mode row switches to single color.
         press(&mut app, KeyCode::Enter);
-        assert!(!app.show_color_popup);
-        assert_eq!(app.palette.single, crate::palette::BarColor::Green);
+        assert!(app.palette.single_mode);
+        assert_eq!(app.color_picker, None);
     }
 
     #[test]
-    fn test_esc_and_c_cancel_the_color_popup() {
+    fn test_enter_opens_the_color_list_and_enter_picks_a_color() {
+        let mut app = App::new();
+        press(&mut app, KeyCode::Char('c'));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.color_picker, Some(0));
+
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.palette.bands[0], crate::palette::BarColor::Lime);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.color_picker, None);
+        assert!(app.show_color_popup);
+        assert_eq!(app.palette.bands[0], crate::palette::BarColor::Lime);
+
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.show_color_popup);
+        assert_eq!(app.palette.bands[0], crate::palette::BarColor::Lime);
+    }
+
+    #[test]
+    fn test_esc_and_c_close_only_the_color_list_first() {
         for closing in [KeyCode::Esc, KeyCode::Char('c')] {
             let mut app = App::new();
             press(&mut app, KeyCode::Char('c'));
-            press(&mut app, KeyCode::Right);
+            press(&mut app, KeyCode::Down);
+            press(&mut app, KeyCode::Enter);
+            press(&mut app, KeyCode::Down);
+            press(&mut app, closing);
+            assert!(app.show_color_popup);
+            assert_eq!(app.color_picker, None);
+            assert_eq!(app.palette, crate::palette::Palette::default());
+
             press(&mut app, closing);
             assert!(!app.show_color_popup);
             assert!(!app.show_popup);
-            assert_eq!(app.palette, crate::palette::Palette::default());
         }
     }
 

@@ -1,4 +1,4 @@
-use crate::palette::Palette;
+use crate::palette::{BarColor, Palette};
 
 /// Fewest bars the visualizer shows, even on a terminal too narrow to fit them.
 pub const MIN_BARS: usize = 32;
@@ -72,8 +72,12 @@ pub struct App {
     pub show_color_popup: bool,
     /// Highlighted row of the color popup (0 is the mode row).
     pub color_row: usize,
-    /// Palette from before the color popup opened, restored when it is cancelled.
-    palette_before_popup: Palette,
+    /// Palette from before the color popup opened, to tell whether it changed.
+    palette_at_open: Palette,
+    /// Highlighted index into [`BarColor::ALL`] while the color list is open for a row.
+    pub color_picker: Option<usize>,
+    /// Color of the edited row from before the color list opened, restored when it is cancelled.
+    color_before_picker: BarColor,
 }
 
 impl Default for App {
@@ -103,7 +107,9 @@ impl Default for App {
             palette: Palette::default(),
             show_color_popup: false,
             color_row: 0,
-            palette_before_popup: Palette::default(),
+            palette_at_open: Palette::default(),
+            color_picker: None,
+            color_before_picker: BarColor::Cyan,
         }
     }
 }
@@ -295,20 +301,20 @@ impl App {
         (self.tick_counter < self.smoothing_notice_until).then_some(self.smoothing)
     }
 
-    /// Opens the color popup, remembering the current palette so Esc can restore it.
+    /// Opens the color popup.
     pub fn open_color_popup(&mut self) {
-        self.palette_before_popup = self.palette;
+        self.palette_at_open = self.palette;
         self.color_row = 0;
+        self.color_picker = None;
         self.show_color_popup = true;
     }
 
-    /// Closes the color popup, keeping the previewed palette on confirm or restoring the old one.
-    pub fn close_color_popup(&mut self, confirm: bool) {
+    /// Closes the color popup, keeping every color chosen in it.
+    pub fn close_color_popup(&mut self) {
         self.show_color_popup = false;
-        if confirm {
+        self.color_picker = None;
+        if self.palette != self.palette_at_open {
             self.color_notice_until = self.tick_counter + NOTICE_TICKS;
-        } else {
-            self.palette = self.palette_before_popup;
         }
     }
 
@@ -323,10 +329,42 @@ impl App {
         self.color_row = (self.color_row + rows - 1) % rows;
     }
 
-    /// Changes the highlighted row's mode or color, previewing it right away.
-    pub fn adjust_color_row(&mut self, forward: bool) {
-        self.palette.adjust(self.color_row, forward);
-        self.color_row = self.color_row.min(self.palette.row_count() - 1);
+    /// Acts on the highlighted row: flips the mode, or opens the list of colors for a color row.
+    pub fn activate_color_row(&mut self) {
+        match self.palette.row_color(self.color_row) {
+            None => {
+                self.palette.toggle_mode();
+                self.color_row = self.color_row.min(self.palette.row_count() - 1);
+            }
+            Some(color) => {
+                self.color_before_picker = color;
+                self.color_picker = BarColor::ALL.iter().position(|&c| c == color);
+            }
+        }
+    }
+
+    /// Moves the color list cursor by one and previews that color on the bars.
+    pub fn move_color_picker(&mut self, forward: bool) {
+        let Some(index) = self.color_picker else {
+            return;
+        };
+        let len = BarColor::ALL.len();
+        let index = if forward {
+            (index + 1) % len
+        } else {
+            (index + len - 1) % len
+        };
+        self.color_picker = Some(index);
+        self.palette
+            .set_row_color(self.color_row, BarColor::ALL[index]);
+    }
+
+    /// Closes the color list, keeping the previewed color when `confirm` and restoring otherwise.
+    pub fn close_color_picker(&mut self, confirm: bool) {
+        if self.color_picker.take().is_some() && !confirm {
+            self.palette
+                .set_row_color(self.color_row, self.color_before_picker);
+        }
     }
 
     /// The color choice to announce on screen right after the user confirmed it.
@@ -365,24 +403,32 @@ mod tests {
     }
 
     #[test]
-    fn test_color_popup_cancel_restores_the_palette() {
+    fn test_color_picker_previews_and_cancel_restores_the_color() {
         let mut app = App::new();
         app.open_color_popup();
-        app.adjust_color_row(true);
-        assert!(app.palette.single_mode);
-        app.close_color_popup(false);
+        app.select_next_color_row();
+        app.activate_color_row();
+        assert_eq!(app.color_picker, Some(0));
+        app.move_color_picker(true);
+        assert_eq!(app.palette.bands[0], BarColor::Green);
+        app.close_color_picker(false);
         assert_eq!(app.palette, Palette::default());
-        assert_eq!(app.color_notice(), None);
+        assert_eq!(app.color_picker, None);
     }
 
     #[test]
-    fn test_color_popup_confirm_keeps_the_palette_and_shows_a_notice() {
+    fn test_color_picker_confirm_keeps_the_color_and_closing_shows_a_notice() {
         let mut app = App::new();
         app.open_color_popup();
-        app.adjust_color_row(true);
-        app.close_color_popup(true);
-        assert!(app.palette.single_mode);
-        assert_eq!(app.color_notice().as_deref(), Some("Cyan"));
+        app.select_next_color_row();
+        app.activate_color_row();
+        app.move_color_picker(false);
+        app.close_color_picker(true);
+        assert_eq!(app.palette.bands[0], BarColor::Gray);
+        assert_eq!(app.color_notice(), None);
+
+        app.close_color_popup();
+        assert_eq!(app.color_notice().as_deref(), Some("Gradient"));
         for _ in 0..90 {
             app.tick();
         }
@@ -390,14 +436,24 @@ mod tests {
     }
 
     #[test]
-    fn test_color_popup_cursor_wraps_and_follows_the_row_count() {
+    fn test_closing_the_color_popup_unchanged_shows_no_notice() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.close_color_popup();
+        assert_eq!(app.color_notice(), None);
+    }
+
+    #[test]
+    fn test_mode_row_toggles_and_cursor_follows_the_row_count() {
         let mut app = App::new();
         app.open_color_popup();
         app.select_prev_color_row();
         assert_eq!(app.color_row, 3);
         app.select_next_color_row();
         assert_eq!(app.color_row, 0);
-        app.adjust_color_row(true);
+        app.activate_color_row();
+        assert!(app.palette.single_mode);
+        assert_eq!(app.color_picker, None);
         app.select_prev_color_row();
         assert_eq!(app.color_row, 1);
     }

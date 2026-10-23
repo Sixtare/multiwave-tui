@@ -95,16 +95,6 @@ impl BarColor {
         let (r, g, b) = self.rgb();
         Color::Rgb(dim(r), dim(g), dim(b))
     }
-
-    fn step(self, forward: bool) -> BarColor {
-        let len = Self::ALL.len();
-        let index = Self::ALL.iter().position(|&c| c == self).unwrap_or(0);
-        Self::ALL[if forward {
-            (index + 1) % len
-        } else {
-            (index + len - 1) % len
-        }]
-    }
 }
 
 /// How the bars are colored: one color per third of the spectrum, or a single color throughout.
@@ -144,18 +134,21 @@ impl Palette {
         }
     }
 
-    /// Row 0 flips the mode; the other rows cycle their color forward or backward.
+    /// Flips between gradient and single-color mode.
     ///
     /// Switching to single-color mode starts from the bass color; each mode keeps its own colors.
-    pub fn adjust(&mut self, row: usize, forward: bool) {
+    pub fn toggle_mode(&mut self) {
+        self.single_mode = !self.single_mode;
+        if self.single_mode {
+            self.single = self.bands[0];
+        }
+    }
+
+    /// Sets the color a picker row edits (row 0 is the mode and has none).
+    pub fn set_row_color(&mut self, row: usize, color: BarColor) {
         match (row, self.single_mode) {
-            (0, false) => {
-                self.single_mode = true;
-                self.single = self.bands[0];
-            }
-            (0, true) => self.single_mode = false,
-            (1, true) => self.single = self.single.step(forward),
-            (1..=3, false) => self.bands[row - 1] = self.bands[row - 1].step(forward),
+            (1, true) => self.single = color,
+            (1..=3, false) => self.bands[row - 1] = color,
             _ => {}
         }
     }
@@ -207,34 +200,30 @@ mod tests {
     }
 
     #[test]
-    fn test_colors_cycle_both_ways() {
-        assert_eq!(BarColor::Gray.step(true), BarColor::Cyan);
-        assert_eq!(BarColor::Cyan.step(false), BarColor::Gray);
-    }
-
-    #[test]
-    fn test_adjust_cycles_the_band_colors() {
+    fn test_set_row_color_edits_the_band() {
         let mut palette = Palette::default();
-        palette.adjust(2, true);
+        palette.set_row_color(2, BarColor::Lime);
+        palette.set_row_color(3, BarColor::Pink);
+        palette.set_row_color(0, BarColor::Red);
         assert_eq!(palette.bands[1], BarColor::Lime);
-        palette.adjust(3, false);
         assert_eq!(palette.bands[2], BarColor::Pink);
+        assert_eq!(palette.bands[0], BarColor::Cyan);
     }
 
     #[test]
     fn test_single_mode_starts_from_bass_and_keeps_bands() {
         let mut palette = Palette::default();
-        palette.adjust(1, true);
-        palette.adjust(0, true);
+        palette.set_row_color(1, BarColor::Green);
+        palette.toggle_mode();
         assert!(palette.single_mode);
-        assert_eq!(palette.single, palette.bands[0]);
+        assert_eq!(palette.single, BarColor::Green);
         assert_eq!(palette.row_count(), 2);
 
-        palette.adjust(1, true);
+        palette.set_row_color(1, BarColor::Lime);
         assert_eq!(palette.colors(), [BarColor::Lime.color(); 3]);
         assert_eq!(palette.mirror_colors(), [BarColor::Lime.mirror_color(); 3]);
 
-        palette.adjust(0, true);
+        palette.toggle_mode();
         assert!(!palette.single_mode);
         assert_eq!(palette.bands[0], BarColor::Green);
         assert_eq!(palette.row_count(), 4);
