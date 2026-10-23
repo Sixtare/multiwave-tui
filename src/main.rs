@@ -126,6 +126,11 @@ fn main() -> Result<()> {
                         dev.set_gain(gain);
                     }
                 }
+                AppAction::SetSmoothing(on) => {
+                    if let Some(ref dev) = sound_device {
+                        dev.set_smoothing(on);
+                    }
+                }
                 AppAction::RecoverLostDevice => {
                     if let Some(ref mut dev) = sound_device {
                         let update =

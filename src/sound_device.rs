@@ -1,7 +1,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU32, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
         mpsc,
     },
     time::{Duration, Instant},
@@ -69,6 +69,8 @@ struct CaptureSettings {
     bar_count: AtomicUsize,
     /// The user's manual sensitivity, as `f32` bits.
     manual_gain_bits: AtomicU32,
+    /// Whether the treble bars are smoothed over time.
+    smoothing: AtomicBool,
 }
 
 impl CaptureSettings {
@@ -236,6 +238,7 @@ impl SoundDevice {
             settings: Arc::new(CaptureSettings {
                 bar_count: AtomicUsize::new(num_bars.clamp(1, MAX_BAR_COUNT)),
                 manual_gain_bits: AtomicU32::new(1.0f32.to_bits()),
+                smoothing: AtomicBool::new(false),
             }),
         })
     }
@@ -252,6 +255,11 @@ impl SoundDevice {
         self.settings
             .manual_gain_bits
             .store(gain.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Turns the treble smoothing of the running capture on or off, effective from the next block.
+    pub fn set_smoothing(&self, on: bool) {
+        self.settings.smoothing.store(on, Ordering::Relaxed);
     }
 
     /// Starts audio capture on the currently active device.
@@ -289,6 +297,7 @@ impl SoundDevice {
             settings.bar_count.load(Ordering::Relaxed),
         );
         processor.set_manual_gain(settings.manual_gain());
+        processor.set_smoothing(settings.smoothing.load(Ordering::Relaxed));
 
         let error_sender = sender.clone();
         let stream = match sample_format {
@@ -650,6 +659,7 @@ where
         move |data: &[T], _: &cpal::InputCallbackInfo| {
             processor.set_num_bars(settings.bar_count.load(Ordering::Relaxed));
             processor.set_manual_gain(settings.manual_gain());
+            processor.set_smoothing(settings.smoothing.load(Ordering::Relaxed));
             scratch.clear();
             scratch.extend(data.iter().map(|&sample| f32::from_sample(sample)));
 

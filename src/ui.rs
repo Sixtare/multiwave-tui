@@ -31,6 +31,8 @@ pub struct FrameState {
     bar_notice: Option<usize>,
     /// Sensitivity announcement, while it is on screen.
     gain_notice: Option<f32>,
+    /// Smoothing announcement, while it is on screen.
+    smoothing_notice: Option<bool>,
 }
 
 impl FrameState {
@@ -51,6 +53,7 @@ impl FrameState {
             audio_error: app.audio_error.clone(),
             bar_notice: app.bar_notice().filter(|_| !app.show_popup),
             gain_notice: app.gain_notice().filter(|_| !app.show_popup),
+            smoothing_notice: app.smoothing_notice().filter(|_| !app.show_popup),
         }
     }
 }
@@ -70,6 +73,11 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     }
     if let Some(gain) = app.gain_notice().filter(|_| !app.show_popup) {
         render_notice(frame, notice_row, &format!(" sensitivity {gain:.2}x "));
+        notice_row += 1;
+    }
+    if let Some(on) = app.smoothing_notice().filter(|_| !app.show_popup) {
+        let state = if on { "on" } else { "off" };
+        render_notice(frame, notice_row, &format!(" smoothing {state} "));
     }
 
     if let Some(error) = &app.audio_error {
@@ -501,6 +509,22 @@ mod tests {
         let after = FrameState::capture(&app, SIZE);
         assert_ne!(during, after);
         assert_eq!(after.gain_notice, None);
+    }
+
+    #[test]
+    fn test_frame_state_changes_while_the_smoothing_notice_is_visible() {
+        let mut app = App::new();
+        let before = FrameState::capture(&app, SIZE);
+
+        app.toggle_smoothing();
+        let during = FrameState::capture(&app, SIZE);
+        assert_ne!(before, during);
+        assert_eq!(during.smoothing_notice, Some(true));
+
+        for _ in 0..90 {
+            app.tick();
+        }
+        assert_eq!(FrameState::capture(&app, SIZE).smoothing_notice, None);
     }
 
     #[test]
