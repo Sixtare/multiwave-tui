@@ -22,6 +22,9 @@ const PLAIN_DECAY_FACTOR: f32 = 0.20;
 /// 60 FPS).
 const NOTICE_TICKS: u64 = 90;
 
+/// Number of rows in the main menu: output device, bar color, sensitivity, bars and smoothing.
+pub const MENU_ROWS: usize = 5;
+
 #[derive(Debug)]
 pub struct App {
     /// Should the application exit?
@@ -57,6 +60,12 @@ pub struct App {
     pub attack_factor: f32,
     /// Decay factor with smoothing on: gradual and fluid falling response.
     pub decay_factor: f32,
+    /// Whether to display the main menu that gathers every option.
+    pub show_menu: bool,
+    /// Highlighted row of the main menu (see [`MENU_ROWS`]).
+    pub menu_row: usize,
+    /// Whether the open popup was opened from the main menu, which then comes back when it closes.
+    return_to_menu: bool,
     /// Whether to display the output device selection popup.
     pub show_popup: bool,
     /// List of available audio device names for display in the popup menu.
@@ -101,6 +110,9 @@ impl Default for App {
             smoothing: false,
             attack_factor: 0.40,
             decay_factor: 0.12,
+            show_menu: false,
+            menu_row: 0,
+            return_to_menu: false,
             show_popup: false,
             devices: Vec::new(),
             selected_device_idx: 0,
@@ -304,8 +316,51 @@ impl App {
         (self.tick_counter < self.smoothing_notice_until).then_some(self.smoothing)
     }
 
+    /// Opens the main menu with the cursor on its first row.
+    pub fn open_menu(&mut self) {
+        self.show_menu = true;
+        self.menu_row = 0;
+    }
+
+    /// Closes the main menu.
+    pub fn close_menu(&mut self) {
+        self.show_menu = false;
+    }
+
+    /// Moves the main menu cursor down, wrapping around.
+    pub fn select_next_menu_row(&mut self) {
+        self.menu_row = (self.menu_row + 1) % MENU_ROWS;
+    }
+
+    /// Moves the main menu cursor up, wrapping around.
+    pub fn select_prev_menu_row(&mut self) {
+        self.menu_row = (self.menu_row + MENU_ROWS - 1) % MENU_ROWS;
+    }
+
+    /// Opens the output device popup, remembering whether the main menu was open under it.
+    pub fn open_device_popup(&mut self) {
+        self.return_to_menu = self.show_menu;
+        self.show_menu = false;
+        self.show_popup = true;
+    }
+
+    /// Closes the output device popup, going back to the main menu if it was opened from there.
+    pub fn close_device_popup(&mut self) {
+        self.show_popup = false;
+        self.restore_menu();
+    }
+
+    fn restore_menu(&mut self) {
+        if self.return_to_menu {
+            self.show_menu = true;
+            self.return_to_menu = false;
+        }
+    }
+
     /// Opens the color popup.
     pub fn open_color_popup(&mut self) {
+        self.return_to_menu = self.show_menu;
+        self.show_menu = false;
         self.palette_at_open = self.palette;
         self.color_row = 0;
         self.color_picker = None;
@@ -315,6 +370,7 @@ impl App {
     /// Closes the color popup, keeping every color chosen in it.
     pub fn close_color_popup(&mut self) {
         self.show_color_popup = false;
+        self.restore_menu();
         self.color_picker = None;
         if self.palette != self.palette_at_open {
             self.color_notice_until = self.tick_counter + NOTICE_TICKS;

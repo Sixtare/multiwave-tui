@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, COLUMNS_PER_BAR},
+    app::{App, COLUMNS_PER_BAR, MENU_ROWS},
     audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
     palette::{BarColor, Palette},
@@ -26,6 +26,8 @@ pub struct FrameState {
     size: Size,
     /// Displayed bars; left empty while the popup hides the visualizer.
     bars: Vec<f32>,
+    show_menu: bool,
+    menu_row: usize,
     show_popup: bool,
     devices: Vec<String>,
     selected_device_idx: usize,
@@ -58,6 +60,8 @@ impl FrameState {
             } else {
                 app.audio_bars.clone()
             },
+            show_menu: app.show_menu,
+            menu_row: app.menu_row,
             show_popup: app.show_popup,
             devices: app.devices.clone(),
             selected_device_idx: app.selected_device_idx,
@@ -81,6 +85,9 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     match app.show_popup {
         false => {
             draw_soundwave(frame, frame.area(), &app.audio_bars, &app.palette, app.gain);
+            if app.show_menu {
+                render_menu(frame, app);
+            }
             if app.show_color_popup {
                 render_color_popup(frame, app);
             }
@@ -268,10 +275,87 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
 
 /// Width of the color popup, and of the color picker box beside it: the square, a gap, the hue
 /// strip and its marker, plus the borders.
+/// Width of the main menu box.
+const MENU_WIDTH: u16 = 32;
+/// Width of the box beside the main menu that lists its shortcuts.
+const SHORTCUTS_WIDTH: u16 = 13;
 const POPUP_WIDTH: u16 = 34;
 const PICKER_WIDTH: u16 = SQUARE_COLS as u16 + 1 + 2 + 1 + 2;
 /// Height of the color picker box: the square, a blank line and the hex line, plus the borders.
 const PICKER_HEIGHT: u16 = SQUARE_ROWS as u16 + 2 + 2;
+
+/// Draws the main menu: every option with its current value, and a second box to its right with
+/// the key that reaches each one directly, row for row.
+fn render_menu(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let height = (MENU_ROWS as u16 + 2).min(area.height);
+    // The two boxes are centered together on the screen.
+    let group_width = (MENU_WIDTH + SHORTCUTS_WIDTH).min(area.width);
+    let group = area.centered(Constraint::Length(group_width), Constraint::Length(height));
+    let menu_area = Rect {
+        width: MENU_WIDTH.min(group.width),
+        ..group
+    };
+    if menu_area.width < 3 || menu_area.height < 3 {
+        return;
+    }
+
+    let block = Block::bordered()
+        .title(" Menu ")
+        .title_alignment(Alignment::Center)
+        .title_bottom(Line::from(" Enter open  Esc close ").centered())
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(menu_area);
+    frame.render_widget(Clear, menu_area);
+    frame.render_widget(block, menu_area);
+
+    let rows = [
+        ("Output device", String::new(), "O"),
+        ("Bar color", app.palette.mode.label().to_string(), "C"),
+        ("Sensitivity", format!("◀ {:.2}x ▶", app.gain), "↑/↓"),
+        ("Bars", format!("◀ {} ▶", app.bar_count), "←/→"),
+        (
+            "Smoothing",
+            format!("◀ {} ▶", if app.smoothing { "on" } else { "off" }),
+            "S",
+        ),
+    ];
+    let lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .map(|(row, (label, value, _))| {
+            let style = if row == app.menu_row {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let cursor = if row == app.menu_row { ">" } else { " " };
+            Line::styled(format!("{cursor} {label:<14}{value}"), style)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+
+    let shortcuts_area = Rect {
+        x: menu_area.right(),
+        width: group.right().saturating_sub(menu_area.right()),
+        ..menu_area
+    };
+    if shortcuts_area.width < 3 {
+        return;
+    }
+    let block = Block::bordered()
+        .title(" Shortcuts ")
+        .title_alignment(Alignment::Center)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(shortcuts_area);
+    frame.render_widget(Clear, shortcuts_area);
+    frame.render_widget(block, shortcuts_area);
+    let lines: Vec<Line> = rows
+        .iter()
+        .map(|(_, _, shortcut)| Line::from(*shortcut).centered())
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
 
 /// Draws the bar color popup over the visualizer, which keeps moving as a live preview.
 ///
@@ -692,6 +776,35 @@ mod tests {
         assert_eq!(
             FrameState::capture(&app, SIZE),
             FrameState::capture(&app, SIZE)
+        );
+    }
+
+    #[test]
+    fn test_menu_shows_every_option_with_its_shortcut() {
+        let mut app = App::new();
+        app.open_menu();
+        let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = (0..12)
+            .flat_map(|y| (0..60).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+            .collect();
+        for expected in [
+            "Output device",
+            "Bar color",
+            "Sensitivity",
+            "1.00x",
+            "Bars",
+            "Smoothing",
+            "↑/↓",
+            "←/→",
+        ] {
+            assert!(text.contains(expected), "{expected}");
+        }
+        assert_ne!(
+            FrameState::capture(&app, SIZE),
+            FrameState::capture(&App::new(), SIZE)
         );
     }
 
