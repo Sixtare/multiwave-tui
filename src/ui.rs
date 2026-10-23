@@ -264,7 +264,8 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
 fn render_color_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let palette = &app.palette;
-    let height = (Palette::ROWS as u16 + 2).min(area.height);
+    // One extra line separates the mirror checkbox from the colors.
+    let height = (Palette::ROWS as u16 + 3).min(area.height);
     let popup_area = area.centered(
         Constraint::Length(34.min(area.width)),
         Constraint::Length(height),
@@ -282,12 +283,12 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, popup_area);
     frame.render_widget(block, popup_area);
 
-    let lines: Vec<Line> = ["Mode", "Bass", "Mids", "Treble"]
+    let mut lines: Vec<Line> = ["Mode", "Bass", "Mids", "Treble", "Mirror"]
         .iter()
         .enumerate()
         .map(|(row, label)| {
             // In single-color mode the mids and treble just follow the bass.
-            let grayed_out = row >= palette.row_count();
+            let grayed_out = !palette.row_selectable(row);
             let selected = row == app.color_row;
             let text_style = if grayed_out {
                 Style::default().fg(Color::DarkGray)
@@ -298,6 +299,10 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
             };
             let value = match palette.row_color(row) {
                 Some(color) => color_value(color, text_style),
+                None if row == Palette::MIRROR_ROW => {
+                    let mark = if palette.mirror_dimmed { "x" } else { " " };
+                    vec![Span::styled(format!("[{mark}] Darker"), text_style)]
+                }
                 None => vec![Span::styled(
                     if palette.single_mode {
                         "Single color"
@@ -315,6 +320,7 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
             Line::from(spans)
         })
         .collect();
+    lines.insert(Palette::MIRROR_ROW, Line::default());
     frame.render_widget(Paragraph::new(lines), inner);
 
     if let Some(cursor) = app.color_picker {
@@ -753,6 +759,30 @@ mod tests {
         assert_eq!(label(top + 4), Color::DarkGray);
         assert_eq!(buffer[(swatch_x, top + 3)].fg, Color::Cyan);
         assert_eq!(buffer[(swatch_x, top + 4)].fg, Color::Cyan);
+    }
+
+    #[test]
+    fn test_mirror_checkbox_and_plain_mirror_colors_are_drawn() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.select_prev_color_row();
+        app.activate_color_row();
+        app.update_audio_bars(vec![1.0; 32]);
+        for _ in 0..30 {
+            app.tick();
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let text: String = (0..24)
+            .flat_map(|y| (0..80).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+            .collect();
+        assert!(text.contains("[ ] Darker"));
+        // The leftmost mirror cell has the same color as the bar above the divider.
+        assert_eq!(buffer[(8, 23)].fg, Color::Cyan);
     }
 
     #[test]

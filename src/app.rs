@@ -318,27 +318,27 @@ impl App {
         }
     }
 
-    /// Moves the color popup cursor down.
+    /// Moves the color popup cursor down, skipping grayed-out rows.
     pub fn select_next_color_row(&mut self) {
-        self.color_row = (self.color_row + 1) % self.palette.row_count();
+        self.color_row = self.palette.next_row(self.color_row, true);
     }
 
-    /// Moves the color popup cursor up.
+    /// Moves the color popup cursor up, skipping grayed-out rows.
     pub fn select_prev_color_row(&mut self) {
-        let rows = self.palette.row_count();
-        self.color_row = (self.color_row + rows - 1) % rows;
+        self.color_row = self.palette.next_row(self.color_row, false);
     }
 
-    /// Acts on the highlighted row: flips the mode, or opens the list of colors for a color row.
+    /// Acts on the highlighted row: flips the mode or the mirror checkbox, or opens the list of
+    /// colors for a color row.
     pub fn activate_color_row(&mut self) {
-        match self.palette.row_color(self.color_row) {
-            None => {
-                self.palette.toggle_mode();
-                self.color_row = self.color_row.min(self.palette.row_count() - 1);
-            }
-            Some(color) => {
-                self.color_before_picker = color;
-                self.color_picker = BarColor::ALL.iter().position(|&c| c == color);
+        match self.color_row {
+            0 => self.palette.toggle_mode(),
+            Palette::MIRROR_ROW => self.palette.toggle_mirror_dimmed(),
+            _ => {
+                if let Some(color) = self.palette.row_color(self.color_row) {
+                    self.color_before_picker = color;
+                    self.color_picker = BarColor::ALL.iter().position(|&c| c == color);
+                }
             }
         }
     }
@@ -448,14 +448,28 @@ mod tests {
         let mut app = App::new();
         app.open_color_popup();
         app.select_prev_color_row();
-        assert_eq!(app.color_row, 3);
+        assert_eq!(app.color_row, 4);
         app.select_next_color_row();
         assert_eq!(app.color_row, 0);
         app.activate_color_row();
         assert!(app.palette.single_mode);
         assert_eq!(app.color_picker, None);
         app.select_prev_color_row();
+        assert_eq!(app.color_row, 4);
+        app.select_prev_color_row();
         assert_eq!(app.color_row, 1);
+    }
+
+    #[test]
+    fn test_mirror_row_toggles_the_checkbox_without_opening_the_list() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.select_prev_color_row();
+        app.activate_color_row();
+        assert!(!app.palette.mirror_dimmed);
+        assert_eq!(app.color_picker, None);
+        app.close_color_popup();
+        assert!(app.color_notice().is_some());
     }
 
     #[test]
