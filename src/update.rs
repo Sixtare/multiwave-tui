@@ -127,10 +127,12 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
         KeyCode::Char('o') | KeyCode::Char('O') => app.open_device_popup(),
         KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Char('s') | KeyCode::Char('S') => app.toggle_smoothing(),
+        KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
         KeyCode::Enter => match app.menu_row {
             0 => app.open_device_popup(),
             1 => app.open_color_popup(),
             4 => app.toggle_smoothing(),
+            5 => app.toggle_bar_gap(),
             _ => {}
         },
         KeyCode::Left | KeyCode::Right => {
@@ -141,6 +143,7 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
                 (3, true) => app.increase_bar_count(),
                 (3, false) => app.decrease_bar_count(),
                 (4, _) => app.toggle_smoothing(),
+                (5, _) => app.toggle_bar_gap(),
                 _ => {}
             }
         }
@@ -211,6 +214,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
         KeyCode::Esc => app.open_menu(),
         KeyCode::Char('o') | KeyCode::Char('O') => app.open_device_popup(),
         KeyCode::Char('s') => app.toggle_smoothing(),
+        KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
         KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Right | KeyCode::Char('l') => app.increase_bar_count(),
         KeyCode::Left | KeyCode::Char('j') => app.decrease_bar_count(),
@@ -553,7 +557,27 @@ mod tests {
         assert!(!app.smoothing);
 
         press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.bar_gap);
+        press(&mut app, KeyCode::Char('g'));
+        assert!(app.bar_gap);
+
+        press(&mut app, KeyCode::Down);
         assert_eq!(app.menu_row, 0);
+    }
+
+    #[test]
+    fn test_g_toggles_the_bar_gap_and_more_bars_fit_without_it() {
+        let mut app = App::new();
+        app.set_terminal_width(100);
+        assert!(app.bar_gap);
+        assert_eq!(app.max_bar_count(), 50);
+        press(&mut app, KeyCode::Char('g'));
+        assert!(!app.bar_gap);
+        assert_eq!(app.max_bar_count(), 100);
+        assert_eq!(app.bar_gap_notice(), Some(false));
+        press(&mut app, KeyCode::Char('g'));
+        assert!(app.bar_gap);
     }
 
     #[test]

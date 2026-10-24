@@ -9,8 +9,10 @@ pub const MIN_BARS: usize = 32;
 pub const MAX_BARS: usize = 256;
 /// Bars added or removed by each key press.
 pub const BAR_STEP: usize = 8;
-/// Terminal columns used by one bar: its glyph plus a spacer.
+/// Terminal columns used by one bar with the gap on: its glyph plus a spacer.
 pub const COLUMNS_PER_BAR: usize = 2;
+/// Terminal columns used by one bar with the gap off: just its glyph, so neighbours touch.
+pub const COLUMNS_PER_BAR_TIGHT: usize = 1;
 /// Lowest and highest sensitivity (gain) multiplier, and how much each key press changes it.
 pub const MIN_GAIN: f32 = 0.1;
 pub const MAX_GAIN: f32 = 5.0;
@@ -22,8 +24,9 @@ const PLAIN_DECAY_FACTOR: f32 = 0.20;
 /// 60 FPS).
 const NOTICE_TICKS: u64 = 90;
 
-/// Number of rows in the main menu: output device, bar color, sensitivity, bars and smoothing.
-pub const MENU_ROWS: usize = 5;
+/// Number of rows in the main menu: output device, bar color, sensitivity, bars, smoothing and
+/// bar gap.
+pub const MENU_ROWS: usize = 6;
 
 #[derive(Debug)]
 pub struct App {
@@ -44,6 +47,8 @@ pub struct App {
     gain_notice_until: u64,
     /// Tick until which the smoothing notice is shown.
     smoothing_notice_until: u64,
+    /// Tick until which the bar gap notice is shown.
+    gap_notice_until: u64,
     /// Tick until which the color notice is shown.
     color_notice_until: u64,
     /// Vector containing normalized and smoothed audio bar magnitudes (0.0 to 1.0).
@@ -56,6 +61,9 @@ pub struct App {
     /// Whether smoothing is on: slower, per-tick bar motion plus the audio processor's treble
     /// power averaging. Off by default.
     pub smoothing: bool,
+    /// Whether a blank column separates neighbouring bars. On by default; off packs the bars
+    /// against each other.
+    pub bar_gap: bool,
     /// Attack factor with smoothing on: fast and damped rising response.
     pub attack_factor: f32,
     /// Decay factor with smoothing on: gradual and fluid falling response.
@@ -103,11 +111,13 @@ impl Default for App {
             bar_notice_until: 0,
             gain_notice_until: 0,
             smoothing_notice_until: 0,
+            gap_notice_until: 0,
             color_notice_until: 0,
             audio_bars: vec![0.0; MIN_BARS],
             target_bars: vec![0.0; MIN_BARS],
             gain: 1.0,
             smoothing: false,
+            bar_gap: true,
             attack_factor: 0.40,
             decay_factor: 0.12,
             show_menu: false,
@@ -170,9 +180,18 @@ impl App {
         self.audio_error = None;
     }
 
+    /// Terminal columns one bar takes, which depends on whether the gap between bars is on.
+    pub fn columns_per_bar(&self) -> usize {
+        if self.bar_gap {
+            COLUMNS_PER_BAR
+        } else {
+            COLUMNS_PER_BAR_TIGHT
+        }
+    }
+
     /// Most bars that fit the terminal width, never below [`MIN_BARS`] or above [`MAX_BARS`].
     pub fn max_bar_count(&self) -> usize {
-        (self.terminal_width as usize / COLUMNS_PER_BAR).clamp(MIN_BARS, MAX_BARS)
+        (self.terminal_width as usize / self.columns_per_bar()).clamp(MIN_BARS, MAX_BARS)
     }
 
     /// Records the terminal width and shrinks or regrows the shown bars to fit it.
@@ -314,6 +333,19 @@ impl App {
     /// The smoothing state to announce on screen right after the user toggled it.
     pub fn smoothing_notice(&self) -> Option<bool> {
         (self.tick_counter < self.smoothing_notice_until).then_some(self.smoothing)
+    }
+
+    /// Turns the gap between bars on or off. Bars take fewer columns without it, so more of the
+    /// chosen count can fit.
+    pub fn toggle_bar_gap(&mut self) {
+        self.bar_gap = !self.bar_gap;
+        self.gap_notice_until = self.tick_counter + NOTICE_TICKS;
+        self.sync_bar_count();
+    }
+
+    /// The bar gap state to announce on screen right after the user toggled it.
+    pub fn bar_gap_notice(&self) -> Option<bool> {
+        (self.tick_counter < self.gap_notice_until).then_some(self.bar_gap)
     }
 
     /// Opens the main menu with the cursor on its first row.

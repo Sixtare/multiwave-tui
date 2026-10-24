@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, COLUMNS_PER_BAR, MENU_ROWS},
+    app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, MENU_ROWS},
     audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
     palette::{BarColor, Palette},
@@ -40,6 +40,10 @@ pub struct FrameState {
     gain_notice: Option<f32>,
     /// Smoothing announcement, while it is on screen.
     smoothing_notice: Option<bool>,
+    /// Bar gap announcement, while it is on screen.
+    gap_notice: Option<bool>,
+    /// Whether a blank column separates the bars.
+    bar_gap: bool,
     palette: Palette,
     /// Manual sensitivity, which sets where the vertical gradient ends.
     gain: f32,
@@ -71,6 +75,8 @@ impl FrameState {
             bar_notice: app.bar_notice().filter(|_| !app.show_popup),
             gain_notice: app.gain_notice().filter(|_| !app.show_popup),
             smoothing_notice: app.smoothing_notice().filter(|_| !app.show_popup),
+            gap_notice: app.bar_gap_notice().filter(|_| !app.show_popup),
+            bar_gap: app.bar_gap,
             palette: app.palette,
             gain: app.gain,
             show_color_popup: app.show_color_popup,
@@ -84,7 +90,14 @@ impl FrameState {
 pub fn render(app: &mut App, frame: &mut Frame) {
     match app.show_popup {
         false => {
-            draw_soundwave(frame, frame.area(), &app.audio_bars, &app.palette, app.gain);
+            draw_soundwave(
+                frame,
+                frame.area(),
+                &app.audio_bars,
+                &app.palette,
+                app.gain,
+                app.bar_gap,
+            );
             if app.show_menu {
                 render_menu(frame, app);
             }
@@ -109,6 +122,11 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     if let Some(on) = app.smoothing_notice().filter(|_| !app.show_popup) {
         let state = if on { "on" } else { "off" };
         render_notice(frame, notice_row, &format!(" smoothing {state} "));
+        notice_row += 1;
+    }
+    if let Some(on) = app.bar_gap_notice().filter(|_| !app.show_popup) {
+        let state = if on { "on" } else { "off" };
+        render_notice(frame, notice_row, &format!(" bar gap {state} "));
         notice_row += 1;
     }
     if let Some(color) = app.color_notice().filter(|_| !app.show_popup) {
@@ -318,6 +336,11 @@ fn render_menu(frame: &mut Frame, app: &App) {
             "Smoothing",
             format!("◀ {} ▶", if app.smoothing { "on" } else { "off" }),
             "S",
+        ),
+        (
+            "Bar gap",
+            format!("◀ {} ▶", if app.bar_gap { "on" } else { "off" }),
+            "G",
         ),
     ];
     let lines: Vec<Line> = rows
@@ -586,6 +609,8 @@ struct Soundwave<'a> {
     palette: &'a Palette,
     /// Height the loudest bars settle at, where the vertical gradient reaches its final color.
     peak_height: f32,
+    /// Whether a blank column follows each bar's glyph.
+    gap: bool,
 }
 
 impl Widget for Soundwave<'_> {
@@ -607,10 +632,15 @@ impl Widget for Soundwave<'_> {
         let top = area.y + (area.height - content_lines).div_ceil(2);
         let divider_y = top + upper_rows as u16;
 
-        // Each bar is a glyph followed by a spacer. The row is centered horizontally; when the
-        // terminal is narrower than the row, the treble side is clipped.
+        // Each bar is a glyph, followed by a spacer when the gap is on. The row is centered
+        // horizontally; when the terminal is narrower than the row, the treble side is clipped.
         let bar_count = self.bars.len();
-        let row_width = bar_count * COLUMNS_PER_BAR;
+        let columns_per_bar = if self.gap {
+            COLUMNS_PER_BAR
+        } else {
+            COLUMNS_PER_BAR_TIGHT
+        };
+        let row_width = bar_count * columns_per_bar;
         let visible_width = row_width.min(area.width as usize);
         let left = area.x + (area.width - visible_width as u16) / 2;
         let mut set_cell = |column: usize, y: u16, glyph: char, color: Color| {
@@ -654,6 +684,7 @@ impl Widget for Soundwave<'_> {
             };
 
         for (i, &amplitude) in self.bars.iter().enumerate() {
+            let column = i * columns_per_bar;
             let color = self.palette.bar_color(i, bar_count).color();
             // Mirror reflection colors: softer/darker tones for depth effect
             let mirror_color = self.palette.mirror_bar_color(i, bar_count);
@@ -667,13 +698,17 @@ impl Widget for Soundwave<'_> {
                 let glyph = bar_glyph(normalized, threshold, upper_rows, WAVE_CHARS);
                 let y = divider_y - 1 - row as u16;
                 let color = upper_row_colors.get(row).copied().unwrap_or(color);
-                set_cell(i * 2, y, glyph, color);
-                set_cell(i * 2 + 1, y, ' ', color);
+                set_cell(column, y, glyph, color);
+                if self.gap {
+                    set_cell(column + 1, y, ' ', color);
+                }
             }
 
             // 2. Subtle center divider line (mirror horizon at screen center)
-            set_cell(i * 2, divider_y, '─', Color::DarkGray);
-            set_cell(i * 2 + 1, divider_y, '─', Color::DarkGray);
+            set_cell(column, divider_y, '─', Color::DarkGray);
+            if self.gap {
+                set_cell(column + 1, divider_y, '─', Color::DarkGray);
+            }
 
             // 3. Mirror Effect (upside down, grows down towards screen bottom)
             for row in 0..mirror_rows {
@@ -686,21 +721,31 @@ impl Widget for Soundwave<'_> {
                 );
                 let y = divider_y + 1 + row as u16;
                 let mirror_color = mirror_row_colors.get(row).copied().unwrap_or(mirror_color);
-                set_cell(i * 2, y, glyph, mirror_color);
-                set_cell(i * 2 + 1, y, ' ', mirror_color);
+                set_cell(column, y, glyph, mirror_color);
+                if self.gap {
+                    set_cell(column + 1, y, ' ', mirror_color);
+                }
             }
         }
     }
 }
 
 /// Draws the spectrum. `gain` is the manual sensitivity, which decides how tall a bar has to be
-/// to show the final color of the vertical gradient.
-pub fn draw_soundwave(frame: &mut Frame, area: Rect, bars: &[f32], palette: &Palette, gain: f32) {
+/// to show the final color of the vertical gradient. `gap` keeps a blank column after each bar.
+pub fn draw_soundwave(
+    frame: &mut Frame,
+    area: Rect,
+    bars: &[f32],
+    palette: &Palette,
+    gain: f32,
+    gap: bool,
+) {
     frame.render_widget(
         Soundwave {
             bars,
             palette,
             peak_height: loudest_bar_height(gain),
+            gap,
         },
         area,
     );
@@ -731,9 +776,31 @@ mod tests {
     ) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|frame| draw_soundwave(frame, frame.area(), bars, palette, gain))
+            .draw(|frame| draw_soundwave(frame, frame.area(), bars, palette, gain, true))
             .unwrap();
         terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn test_soundwave_without_gap_packs_the_bars_against_each_other() {
+        let mut bars = vec![1.0; 32];
+        bars[1] = 0.0;
+        let mut terminal = Terminal::new(TestBackend::new(80, 7)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_soundwave(frame, frame.area(), &bars, &Palette::default(), 1.0, false)
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        // 32 columns centered in 80 start at column 24; neighbours are adjacent.
+        assert_eq!(buffer[(23, 0)].symbol(), " ");
+        assert_eq!(buffer[(24, 0)].symbol(), "█");
+        assert_eq!(buffer[(25, 0)].symbol(), " ");
+        assert_eq!(buffer[(26, 0)].symbol(), "█");
+        assert_eq!(buffer[(24, 3)].symbol(), "─");
+        assert_eq!(buffer[(55, 3)].symbol(), "─");
+        assert_eq!(buffer[(56, 3)].symbol(), " ");
     }
 
     #[test]
