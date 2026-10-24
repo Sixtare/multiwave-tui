@@ -19,6 +19,9 @@ pub mod ui;
 /// Terminal user interface.
 pub mod tui;
 
+/// Output listing and capture through `pactl`/`parec` (Linux).
+pub mod pulse;
+
 /// Sound device audio capture with cpal.
 pub mod sound_device;
 
