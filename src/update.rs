@@ -107,8 +107,8 @@ fn update_color_picker(app: &mut App, key_event: KeyEvent) {
         KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_picker(false),
         KeyCode::Enter => app.close_color_picker(true),
         KeyCode::Tab => app.edit_color_picker(ColorPicker::next_focus),
-        KeyCode::Up | KeyCode::Char('k') => app.edit_color_picker(|p| p.nudge(0, -1, fine)),
-        KeyCode::Down | KeyCode::Char('j') => app.edit_color_picker(|p| p.nudge(0, 1, fine)),
+        KeyCode::Up => app.edit_color_picker(|p| p.nudge(0, -1, fine)),
+        KeyCode::Down => app.edit_color_picker(|p| p.nudge(0, 1, fine)),
         KeyCode::Left => app.edit_color_picker(|p| p.nudge(-1, 0, fine)),
         KeyCode::Right => app.edit_color_picker(|p| p.nudge(1, 0, fine)),
         _ => {}
@@ -122,8 +122,8 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
             app.quit()
         }
         KeyCode::Esc => app.close_menu(),
-        KeyCode::Up | KeyCode::Char('k') => app.select_prev_menu_row(),
-        KeyCode::Down | KeyCode::Char('j') => app.select_next_menu_row(),
+        KeyCode::Up => app.select_prev_menu_row(),
+        KeyCode::Down => app.select_next_menu_row(),
         KeyCode::Char('o') | KeyCode::Char('O') => app.open_device_popup(),
         KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Char('s') | KeyCode::Char('S') => app.toggle_smoothing(),
@@ -171,8 +171,8 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             KeyCode::Enter => app.activate_color_row(),
             KeyCode::Left => app.change_color_mode(false),
             KeyCode::Right => app.change_color_mode(true),
-            KeyCode::Up | KeyCode::Char('k') => app.select_prev_color_row(),
-            KeyCode::Down | KeyCode::Char('j') => app.select_next_color_row(),
+            KeyCode::Up => app.select_prev_color_row(),
+            KeyCode::Down => app.select_next_color_row(),
             _ => {}
         }
         return None;
@@ -184,10 +184,10 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             KeyCode::Esc | KeyCode::Char('o') | KeyCode::Char('O') => {
                 app.close_device_popup();
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 app.select_prev_device();
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 app.select_next_device();
             }
             KeyCode::Enter => {
@@ -216,10 +216,10 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('s') => app.toggle_smoothing(),
         KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
         KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
-        KeyCode::Right | KeyCode::Char('l') => app.increase_bar_count(),
-        KeyCode::Left | KeyCode::Char('j') => app.decrease_bar_count(),
-        KeyCode::Up | KeyCode::Char('i') => app.increase_gain(),
-        KeyCode::Down | KeyCode::Char('k') => app.decrease_gain(),
+        KeyCode::Right => app.increase_bar_count(),
+        KeyCode::Left => app.decrease_bar_count(),
+        KeyCode::Up => app.increase_gain(),
+        KeyCode::Down => app.decrease_gain(),
         _ => {}
     }
     None
@@ -502,8 +502,7 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         assert!(app.show_menu && !app.show_popup);
 
-        // Keys of the closed screen are swallowed, `i` and `l` do nothing.
-        press(&mut app, KeyCode::Char('l'));
+        // Keys of the closed screen are swallowed, `q` does not quit.
         press(&mut app, KeyCode::Char('q'));
         assert_eq!(app.bar_count, 32);
         assert!(!app.should_quit);
@@ -630,7 +629,7 @@ mod tests {
             batch_of(vec![
                 key(KeyCode::Right),
                 key(KeyCode::Right),
-                key(KeyCode::Char('l')),
+                key(KeyCode::Right),
                 key(KeyCode::Left),
             ]),
         );
@@ -672,10 +671,7 @@ mod tests {
 
         update(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         assert_eq!(app.bar_count, 40);
-        update(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-        );
+        update(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         assert_eq!(app.bar_count, 32);
         assert_eq!(app.gain, gain);
     }
@@ -687,10 +683,7 @@ mod tests {
         app.show_popup = true;
 
         update(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        update(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
-        );
+        update(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
 
         assert_eq!(app.bar_count, 32);
     }
@@ -704,7 +697,7 @@ mod tests {
             batch_of(vec![
                 key(KeyCode::Up),
                 key(KeyCode::Up),
-                key(KeyCode::Char('i')),
+                key(KeyCode::Up),
                 key(KeyCode::Down),
             ]),
         );
