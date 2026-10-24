@@ -1,5 +1,9 @@
 use std::{
-    sync::mpsc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -122,18 +126,23 @@ pub struct EventHandler {
     /// Event handler thread.
     #[allow(dead_code)]
     handler: thread::JoinHandle<()>,
+    /// Tick period in microseconds, read by the polling thread on every loop.
+    tick_micros: Arc<AtomicU64>,
 }
 
 impl EventHandler {
     /// Constructs a new instance of [`EventHandler`].
     pub fn new(tick_rate: u64) -> Self {
-        let tick_rate = Duration::from_millis(tick_rate);
+        let tick_micros = Arc::new(AtomicU64::new(tick_rate * 1000));
+        let thread_tick_micros = Arc::clone(&tick_micros);
         let (sender, receiver) = mpsc::channel();
         let handler = {
             let sender = sender.clone();
             thread::spawn(move || {
                 let mut last_tick = Instant::now();
                 loop {
+                    let tick_rate =
+                        Duration::from_micros(thread_tick_micros.load(Ordering::Relaxed));
                     let timeout = tick_rate
                         .checked_sub(last_tick.elapsed())
                         .unwrap_or(tick_rate);
@@ -160,7 +169,14 @@ impl EventHandler {
             sender,
             receiver,
             handler,
+            tick_micros,
         }
+    }
+
+    /// Makes the handler emit `fps` ticks per second, effective from the next tick.
+    pub fn set_fps(&self, fps: u32) {
+        let micros = 1_000_000 / u64::from(fps.max(1));
+        self.tick_micros.store(micros, Ordering::Relaxed);
     }
 
     /// Returns a clone of the event sender.

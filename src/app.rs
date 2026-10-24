@@ -21,12 +21,15 @@ const GAIN_STEP: f32 = 0.10;
 const PLAIN_ATTACK_FACTOR: f32 = 0.65;
 const PLAIN_DECAY_FACTOR: f32 = 0.20;
 /// How long a bar count, sensitivity, smoothing or color notice stays on screen, in ticks (~1.5 s at
-/// 60 FPS).
+/// 60 FPS; other frame rates scale it, see [`App::notice_ticks`]).
 const NOTICE_TICKS: u64 = 90;
+/// The frame rates the user can pick, and the one the animation constants were tuned at.
+pub const FPS_OPTIONS: [u32; 4] = [30, 60, 90, 120];
+pub const DEFAULT_FPS: u32 = 60;
 
-/// Number of rows in the main menu: output device, bar color, sensitivity, bars, smoothing and
-/// bar gap.
-pub const MENU_ROWS: usize = 6;
+/// Number of rows in the main menu: output device, bar color, sensitivity, bars, smoothing, bar
+/// gap and frame rate.
+pub const MENU_ROWS: usize = 7;
 
 #[derive(Debug)]
 pub struct App {
@@ -49,6 +52,8 @@ pub struct App {
     smoothing_notice_until: u64,
     /// Tick until which the bar gap notice is shown.
     gap_notice_until: u64,
+    /// Tick until which the frame rate notice is shown.
+    fps_notice_until: u64,
     /// Tick until which the color notice is shown.
     color_notice_until: u64,
     /// Vector containing normalized and smoothed audio bar magnitudes (0.0 to 1.0).
@@ -64,6 +69,8 @@ pub struct App {
     /// Whether a blank column separates neighbouring bars. On by default; off packs the bars
     /// against each other.
     pub bar_gap: bool,
+    /// Frames (ticks) per second, one of [`FPS_OPTIONS`].
+    pub fps: u32,
     /// Attack factor with smoothing on: fast and damped rising response.
     pub attack_factor: f32,
     /// Decay factor with smoothing on: gradual and fluid falling response.
@@ -112,12 +119,14 @@ impl Default for App {
             gain_notice_until: 0,
             smoothing_notice_until: 0,
             gap_notice_until: 0,
+            fps_notice_until: 0,
             color_notice_until: 0,
             audio_bars: vec![0.0; MIN_BARS],
             target_bars: vec![0.0; MIN_BARS],
             gain: 1.0,
             smoothing: false,
             bar_gap: true,
+            fps: DEFAULT_FPS,
             attack_factor: 0.40,
             decay_factor: 0.12,
             show_menu: false,
@@ -155,14 +164,24 @@ impl App {
         }
     }
 
-    /// Executes an animation cycle on each tick (~60 FPS).
+    /// Executes an animation cycle on each tick (`fps` times per second).
+    ///
+    /// The per-tick factors are tuned at 60 FPS, so at other rates they are rescaled to give the
+    /// same response per second.
     pub fn tick(&mut self) {
         self.tick_counter += 1;
+        let steps = DEFAULT_FPS as f32 / self.fps as f32;
         // Gradually decay targets for natural sound fade-out
+        let target_decay = 0.94f32.powf(steps);
         for target in &mut self.target_bars {
-            *target = (*target * 0.94).max(0.0);
+            *target = (*target * target_decay).max(0.0);
         }
-        self.apply_smoothing();
+        self.apply_response(steps);
+    }
+
+    /// How many ticks a notice stays on screen, so it lasts the same time at every frame rate.
+    fn notice_ticks(&self) -> u64 {
+        NOTICE_TICKS * self.fps as u64 / DEFAULT_FPS as u64
     }
 
     /// Sets should_quit to true to quit the application.
@@ -228,7 +247,7 @@ impl App {
             self.chosen_bar_count = target;
             self.sync_bar_count();
         }
-        self.bar_notice_until = self.tick_counter + NOTICE_TICKS;
+        self.bar_notice_until = self.tick_counter + self.notice_ticks();
     }
 
     /// Recomputes the shown bar count and stretches the current bars to the new length, so the
@@ -299,10 +318,23 @@ impl App {
     /// and rises again within a few frames from flickering, without holding it still. With
     /// smoothing off it also runs on every audio frame, with the faster plain factors.
     pub fn apply_smoothing(&mut self) {
+        self.apply_response(1.0);
+    }
+
+    /// Moves the bars towards their targets as `steps` 60 FPS ticks would (1.0 for one).
+    fn apply_response(&mut self, steps: f32) {
         let (attack, decay) = if self.smoothing {
             (self.attack_factor, self.decay_factor)
         } else {
             (PLAIN_ATTACK_FACTOR, PLAIN_DECAY_FACTOR)
+        };
+        let (attack, decay) = if steps == 1.0 {
+            (attack, decay)
+        } else {
+            (
+                1.0 - (1.0 - attack).powf(steps),
+                1.0 - (1.0 - decay).powf(steps),
+            )
         };
         for (current, &target) in self.audio_bars.iter_mut().zip(&self.target_bars) {
             let factor = if target > *current { attack } else { decay };
@@ -319,19 +351,19 @@ impl App {
     /// Increases visualization sensitivity/gain.
     pub fn increase_gain(&mut self) {
         self.gain = round_gain((self.gain + GAIN_STEP).min(MAX_GAIN));
-        self.gain_notice_until = self.tick_counter + NOTICE_TICKS;
+        self.gain_notice_until = self.tick_counter + self.notice_ticks();
     }
 
     /// Decreases visualization sensitivity/gain.
     pub fn decrease_gain(&mut self) {
         self.gain = round_gain((self.gain - GAIN_STEP).max(MIN_GAIN));
-        self.gain_notice_until = self.tick_counter + NOTICE_TICKS;
+        self.gain_notice_until = self.tick_counter + self.notice_ticks();
     }
 
     /// Turns smoothing on or off.
     pub fn toggle_smoothing(&mut self) {
         self.smoothing = !self.smoothing;
-        self.smoothing_notice_until = self.tick_counter + NOTICE_TICKS;
+        self.smoothing_notice_until = self.tick_counter + self.notice_ticks();
     }
 
     /// The smoothing state to announce on screen right after the user toggled it.
@@ -343,13 +375,34 @@ impl App {
     /// chosen count can fit.
     pub fn toggle_bar_gap(&mut self) {
         self.bar_gap = !self.bar_gap;
-        self.gap_notice_until = self.tick_counter + NOTICE_TICKS;
+        self.gap_notice_until = self.tick_counter + self.notice_ticks();
         self.sync_bar_count();
     }
 
     /// The bar gap state to announce on screen right after the user toggled it.
     pub fn bar_gap_notice(&self) -> Option<bool> {
         (self.tick_counter < self.gap_notice_until).then_some(self.bar_gap)
+    }
+
+    /// Picks the next (or previous) frame rate of [`FPS_OPTIONS`], wrapping around.
+    pub fn change_fps(&mut self, forward: bool) {
+        let len = FPS_OPTIONS.len();
+        let current = FPS_OPTIONS
+            .iter()
+            .position(|&fps| fps == self.fps)
+            .unwrap_or(1);
+        let next = if forward {
+            current + 1
+        } else {
+            current + len - 1
+        } % len;
+        self.fps = FPS_OPTIONS[next];
+        self.fps_notice_until = self.tick_counter + self.notice_ticks();
+    }
+
+    /// The frame rate to announce on screen right after the user changed it.
+    pub fn fps_notice(&self) -> Option<u32> {
+        (self.tick_counter < self.fps_notice_until).then_some(self.fps)
     }
 
     /// Opens the main menu with the cursor on its first row.
@@ -409,7 +462,7 @@ impl App {
         self.restore_menu();
         self.color_picker = None;
         if self.palette != self.palette_at_open {
-            self.color_notice_until = self.tick_counter + NOTICE_TICKS;
+            self.color_notice_until = self.tick_counter + self.notice_ticks();
         }
     }
 
@@ -1014,5 +1067,54 @@ mod tests {
         // Wrap-around backward
         app.select_prev_device();
         assert_eq!(app.selected_device_idx, 2);
+    }
+
+    #[test]
+    fn test_fps_steps_through_the_options_and_wraps() {
+        let mut app = App::new();
+        assert_eq!(app.fps, 60);
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            app.change_fps(true);
+            seen.push(app.fps);
+        }
+        assert_eq!(seen, [90, 120, 30, 60]);
+        app.change_fps(false);
+        assert_eq!(app.fps, 30);
+    }
+
+    #[test]
+    fn test_bars_fall_equally_fast_per_second_at_every_fps() {
+        let fall_after_one_second = |fps: u32| {
+            let mut app = App::new();
+            app.fps = fps;
+            app.audio_bars = vec![1.0; 32];
+            for _ in 0..fps {
+                app.tick();
+            }
+            app.audio_bars[0]
+        };
+        let at_60 = fall_after_one_second(60);
+        for fps in [30, 90, 120] {
+            let at = fall_after_one_second(fps);
+            assert!((at - at_60).abs() < 0.01, "{fps} fps: {at} vs {at_60}");
+        }
+    }
+
+    #[test]
+    fn test_notices_last_the_same_time_at_every_fps() {
+        for fps in FPS_OPTIONS {
+            let mut app = App::new();
+            app.fps = fps;
+            app.toggle_bar_gap();
+            for _ in 0..(fps * 3 / 4) {
+                app.tick();
+            }
+            assert!(app.bar_gap_notice().is_some(), "{fps} fps: gone too early");
+            for _ in 0..(fps * 3 / 4 + 1) {
+                app.tick();
+            }
+            assert!(app.bar_gap_notice().is_none(), "{fps} fps: still shown");
+        }
     }
 }

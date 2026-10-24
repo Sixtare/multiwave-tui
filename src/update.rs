@@ -17,6 +17,8 @@ pub enum AppAction {
     SetGain(f32),
     /// Make the running capture smooth (or not) the treble bars.
     SetSmoothing(bool),
+    /// Make the event loop tick (and so draw) this many times per second.
+    SetFps(u32),
     /// Rebuild capture after the audio callback reported a lost or invalidated stream.
     RecoverLostDevice,
     /// Check whether the default output or device list changed (rate-limited by `SoundDevice`).
@@ -48,6 +50,7 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
     let bar_count_before = app.bar_count;
     let gain_before = app.gain;
     let smoothing_before = app.smoothing;
+    let fps_before = app.fps;
 
     // Applied first so keys and audio frames in the same batch see the new terminal width.
     if let Some(width) = batch.latest_width {
@@ -86,6 +89,10 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
 
     if app.smoothing != smoothing_before {
         outcome.actions.push(AppAction::SetSmoothing(app.smoothing));
+    }
+
+    if app.fps != fps_before {
+        outcome.actions.push(AppAction::SetFps(app.fps));
     }
 
     for _ in 0..batch.ticks {
@@ -128,11 +135,13 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
         KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Char('s') | KeyCode::Char('S') => app.toggle_smoothing(),
         KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
+        KeyCode::Char('f') | KeyCode::Char('F') => app.change_fps(true),
         KeyCode::Enter => match app.menu_row {
             0 => app.open_device_popup(),
             1 => app.open_color_popup(),
             4 => app.toggle_smoothing(),
             5 => app.toggle_bar_gap(),
+            6 => app.change_fps(true),
             _ => {}
         },
         KeyCode::Left | KeyCode::Right => {
@@ -144,6 +153,7 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
                 (3, false) => app.decrease_bar_count(),
                 (4, _) => app.toggle_smoothing(),
                 (5, _) => app.toggle_bar_gap(),
+                (6, forward) => app.change_fps(forward),
                 _ => {}
             }
         }
@@ -215,6 +225,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('o') | KeyCode::Char('O') => app.open_device_popup(),
         KeyCode::Char('s') => app.toggle_smoothing(),
         KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
+        KeyCode::Char('f') | KeyCode::Char('F') => app.change_fps(true),
         KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Right => app.increase_bar_count(),
         KeyCode::Left => app.decrease_bar_count(),
@@ -567,7 +578,30 @@ mod tests {
         assert!(app.bar_gap);
 
         press(&mut app, KeyCode::Down);
+        assert_eq!(app.fps, 60);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.fps, 90);
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.fps, 60);
+        press(&mut app, KeyCode::Char('f'));
+        assert_eq!(app.fps, 90);
+
+        press(&mut app, KeyCode::Down);
         assert_eq!(app.menu_row, 0);
+    }
+
+    #[test]
+    fn test_f_cycles_through_the_frame_rates_and_reports_each_change() {
+        let mut app = App::new();
+        let mut seen = Vec::new();
+        for _ in 0..5 {
+            let batch = batch_of(vec![key(KeyCode::Char('f'))]);
+            let outcome = apply_batch(&mut app, batch);
+            assert!(matches!(outcome.actions[0], AppAction::SetFps(_)));
+            seen.push(app.fps);
+        }
+        assert_eq!(seen, [90, 120, 30, 60, 90]);
+        assert_eq!(app.fps_notice(), Some(90));
     }
 
     #[test]
