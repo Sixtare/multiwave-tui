@@ -124,19 +124,19 @@ impl ColorMode {
     pub fn next(self) -> ColorMode {
         match self {
             ColorMode::Single => ColorMode::Gradient,
-            ColorMode::Gradient => ColorMode::Rainbow,
-            ColorMode::Rainbow => ColorMode::Vertical,
-            ColorMode::Vertical => ColorMode::Single,
+            ColorMode::Gradient => ColorMode::Vertical,
+            ColorMode::Vertical => ColorMode::Rainbow,
+            ColorMode::Rainbow => ColorMode::Single,
         }
     }
 
     /// The mode before this one in the picker's order.
     pub fn previous(self) -> ColorMode {
         match self {
-            ColorMode::Single => ColorMode::Vertical,
+            ColorMode::Single => ColorMode::Rainbow,
             ColorMode::Gradient => ColorMode::Single,
-            ColorMode::Rainbow => ColorMode::Gradient,
-            ColorMode::Vertical => ColorMode::Rainbow,
+            ColorMode::Vertical => ColorMode::Gradient,
+            ColorMode::Rainbow => ColorMode::Vertical,
         }
     }
 
@@ -412,13 +412,13 @@ mod tests {
     }
 
     #[test]
-    fn test_mode_cycles_single_gradient_rainbow_vertical() {
+    fn test_mode_cycles_single_gradient_vertical_rainbow() {
         let mut palette = Palette::default();
         assert_eq!(palette.mode, ColorMode::Single);
         for expected in [
             ColorMode::Gradient,
-            ColorMode::Rainbow,
             ColorMode::Vertical,
+            ColorMode::Rainbow,
             ColorMode::Single,
         ] {
             palette.change_mode(true);
@@ -426,8 +426,8 @@ mod tests {
         }
         // Backwards wraps around the other way.
         for expected in [
-            ColorMode::Vertical,
             ColorMode::Rainbow,
+            ColorMode::Vertical,
             ColorMode::Gradient,
             ColorMode::Single,
         ] {

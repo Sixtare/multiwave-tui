@@ -329,21 +329,21 @@ mod tests {
         assert_eq!(app.bar_count, 32);
 
         // Enter does nothing on the mode row; Right goes from single color through the
-        // gradients and the rainbow to the vertical gradient, and Left goes back.
+        // gradients to the rainbow, and Left goes back.
         assert_eq!(app.palette.mode, ColorMode::Single);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.palette.mode, ColorMode::Single);
         for expected in [
             ColorMode::Gradient,
-            ColorMode::Rainbow,
             ColorMode::Vertical,
+            ColorMode::Rainbow,
             ColorMode::Single,
         ] {
             press(&mut app, KeyCode::Right);
             assert_eq!(app.palette.mode, expected);
         }
         press(&mut app, KeyCode::Left);
-        assert_eq!(app.palette.mode, ColorMode::Vertical);
+        assert_eq!(app.palette.mode, ColorMode::Rainbow);
         assert_eq!(app.color_picker, None);
         assert_eq!(app.bar_count, 32);
     }
