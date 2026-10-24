@@ -804,6 +804,19 @@ mod tests {
     }
 
     #[test]
+    fn test_rainbow_mode_colors_each_bar_by_its_position() {
+        let palette = Palette {
+            mode: ColorMode::Rainbow,
+            ..Palette::default()
+        };
+        let buffer = render_bars_with(&[1.0; 32], 80, 7, &palette);
+
+        assert_eq!(buffer[(8, 0)].fg, Color::Rgb(255, 77, 77));
+        assert_eq!(buffer[(70, 0)].fg, palette.bar_color(31, 32).color());
+        assert_ne!(buffer[(8, 0)].fg, buffer[(40, 0)].fg);
+    }
+
+    #[test]
     fn test_soundwave_layout() {
         let mut bars = vec![0.0; 32];
         bars[0] = 1.0;
