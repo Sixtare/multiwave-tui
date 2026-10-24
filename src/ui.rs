@@ -839,14 +839,15 @@ mod tests {
 
     #[test]
     fn test_soundwave_clips_treble_on_narrow_terminal() {
-        let bands = Palette {
-            mode: ColorMode::Bands,
+        let gradient = Palette {
+            mode: ColorMode::Gradient,
             ..Palette::default()
         };
-        let buffer = render_bars_with(&[1.0; 32], 40, 7, &bands);
+        let buffer = render_bars_with(&[1.0; 32], 40, 7, &gradient);
 
+        // 40 columns show the first 20 bars; the rest, the treble side, is clipped.
         assert_eq!(buffer[(0, 0)].fg, Color::Rgb(0, 255, 255));
-        assert_eq!(buffer[(39, 0)].fg, Color::Rgb(0, 205, 0));
+        assert_eq!(buffer[(39, 0)].fg, gradient.bar_color(19, 32).color());
     }
 
     #[test]

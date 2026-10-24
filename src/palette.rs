@@ -108,8 +108,6 @@ impl BarColor {
 /// How the bars take their colors from the three picked colors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorMode {
-    /// One flat color per third of the spectrum.
-    Bands,
     /// A smooth blend: bass at the left end, mids in the middle and treble at the right end.
     Gradient,
     /// The colors of the rainbow along the bars, from red at the first bar to violet at the last.
@@ -128,25 +126,22 @@ impl ColorMode {
             ColorMode::Single => ColorMode::Gradient,
             ColorMode::Gradient => ColorMode::Rainbow,
             ColorMode::Rainbow => ColorMode::Vertical,
-            ColorMode::Vertical => ColorMode::Bands,
-            ColorMode::Bands => ColorMode::Single,
+            ColorMode::Vertical => ColorMode::Single,
         }
     }
 
     /// The mode before this one in the picker's order.
     pub fn previous(self) -> ColorMode {
         match self {
-            ColorMode::Single => ColorMode::Bands,
+            ColorMode::Single => ColorMode::Vertical,
             ColorMode::Gradient => ColorMode::Single,
             ColorMode::Rainbow => ColorMode::Gradient,
             ColorMode::Vertical => ColorMode::Rainbow,
-            ColorMode::Bands => ColorMode::Vertical,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            ColorMode::Bands => "Bands",
             ColorMode::Gradient => "Gradient",
             ColorMode::Rainbow => "Rainbow",
             ColorMode::Vertical => "Vertical gradient",
@@ -155,7 +150,7 @@ impl ColorMode {
     }
 }
 
-/// How the bars are colored: by bands, by a smooth gradient or with the bass color throughout.
+/// How the bars are colored: by a smooth gradient, by the rainbow or with the bass color throughout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Palette {
     pub mode: ColorMode,
@@ -253,18 +248,8 @@ impl Palette {
 
     /// The color of bar `bar` out of `bar_count`. In vertical mode that is the color of its base.
     pub fn bar_color(&self, bar: usize, bar_count: usize) -> BarColor {
-        let [bass, mids, treble] = self.bands;
         match self.mode {
-            ColorMode::Single | ColorMode::Vertical => bass,
-            ColorMode::Bands => {
-                if bar < bar_count / 3 {
-                    bass
-                } else if bar < (bar_count * 2) / 3 {
-                    mids
-                } else {
-                    treble
-                }
-            }
+            ColorMode::Single | ColorMode::Vertical => self.bands[0],
             ColorMode::Gradient => self.blend(Self::position(bar, bar_count)),
             ColorMode::Rainbow => BarColor::from_hsv(
                 Self::position(bar, bar_count) * RAINBOW_END_HUE,
@@ -365,29 +350,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bands_use_one_flat_color_per_third() {
-        let palette = Palette {
-            mode: ColorMode::Bands,
-            ..Palette::default()
-        };
-        let colors: Vec<BarColor> = [0, 9, 10, 20, 21, 31]
-            .iter()
-            .map(|&bar| palette.bar_color(bar, 32))
-            .collect();
-        assert_eq!(
-            colors,
-            [
-                BarColor::CYAN,
-                BarColor::CYAN,
-                BarColor::GREEN,
-                BarColor::GREEN,
-                BarColor::MAGENTA,
-                BarColor::MAGENTA
-            ]
-        );
-    }
-
-    #[test]
     fn test_mirror_is_half_as_bright() {
         assert_eq!(BarColor::CYAN.mirror_color(), Color::Rgb(0, 128, 128));
         assert_eq!(
@@ -438,7 +400,7 @@ mod tests {
     #[test]
     fn test_set_row_color_edits_the_band() {
         let mut palette = Palette {
-            mode: ColorMode::Bands,
+            mode: ColorMode::Gradient,
             ..Palette::default()
         };
         palette.set_row_color(2, BarColor::rgb(1, 2, 3));
@@ -450,14 +412,13 @@ mod tests {
     }
 
     #[test]
-    fn test_mode_cycles_single_gradient_vertical_bands() {
+    fn test_mode_cycles_single_gradient_rainbow_vertical() {
         let mut palette = Palette::default();
         assert_eq!(palette.mode, ColorMode::Single);
         for expected in [
             ColorMode::Gradient,
             ColorMode::Rainbow,
             ColorMode::Vertical,
-            ColorMode::Bands,
             ColorMode::Single,
         ] {
             palette.change_mode(true);
@@ -465,7 +426,6 @@ mod tests {
         }
         // Backwards wraps around the other way.
         for expected in [
-            ColorMode::Bands,
             ColorMode::Vertical,
             ColorMode::Rainbow,
             ColorMode::Gradient,
@@ -497,7 +457,7 @@ mod tests {
         assert_eq!(palette.describe(), "#0A141E");
 
         // The mids and treble colors come back with the other modes.
-        palette.mode = ColorMode::Bands;
+        palette.mode = ColorMode::Gradient;
         assert!(palette.row_selectable(2));
         assert_eq!(palette.bands, [custom, BarColor::GREEN, BarColor::MAGENTA]);
     }
@@ -531,7 +491,7 @@ mod tests {
         };
         let colors: Vec<BarColor> = (0..64).map(|bar| palette.bar_color(bar, 64)).collect();
 
-        // No jump between neighbours, unlike the flat bands, and every bar differs from the next.
+        // No jump between neighbours, unlike flat colors, and every bar differs from the next.
         for pair in colors.windows(2) {
             assert_ne!(pair[0], pair[1]);
             let jump = |a: u8, b: u8| a.abs_diff(b);
@@ -620,7 +580,7 @@ mod tests {
     #[test]
     fn test_mirror_without_dimming_uses_the_bar_colors() {
         let mut palette = Palette::default();
-        for mode in [ColorMode::Bands, ColorMode::Gradient, ColorMode::Single] {
+        for mode in [ColorMode::Gradient, ColorMode::Single] {
             palette.mode = mode;
             palette.mirror_dimmed = true;
             let bar = palette.bar_color(5, 32);
@@ -663,7 +623,7 @@ mod tests {
         assert_eq!(palette.row_color(0), None);
         // By default the mids and treble follow the bass.
         assert_eq!(palette.row_color(3), Some(BarColor::CYAN));
-        palette.mode = ColorMode::Bands;
+        palette.mode = ColorMode::Gradient;
         assert_eq!(palette.row_color(3), Some(BarColor::MAGENTA));
     }
 }
