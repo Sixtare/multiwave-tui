@@ -63,7 +63,7 @@ fn apply_device_update(app: &mut App, update: DeviceListUpdate) {
 }
 
 fn main() -> Result<()> {
-    // Initialize the TUI event handler (~60 FPS at 16ms)
+    // Initialize the TUI event handler (~60 FPS at 16ms; the user can change the rate)
     let events = EventHandler::new(16);
     let audio_sender = events.sender();
 
@@ -85,6 +85,7 @@ fn main() -> Result<()> {
 
     // Initialize application state with device names (App does NOT hold SoundDevice)
     let mut app = App::with_devices(device_names, active_idx);
+    events.set_fps(app.fps);
     if let Some(error) = startup_error {
         app.set_audio_error(error);
     }
@@ -135,6 +136,7 @@ fn main() -> Result<()> {
                         dev.set_gain(gain);
                     }
                 }
+                AppAction::SetFps(fps) => tui.events.set_fps(fps),
                 AppAction::SetSmoothing(on) => {
                     if let Some(ref dev) = sound_device {
                         dev.set_smoothing(on);

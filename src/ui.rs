@@ -42,6 +42,8 @@ pub struct FrameState {
     smoothing_notice: Option<bool>,
     /// Bar gap announcement, while it is on screen.
     gap_notice: Option<bool>,
+    /// Frame rate announcement, while it is on screen.
+    fps_notice: Option<u32>,
     /// Whether a blank column separates the bars.
     bar_gap: bool,
     palette: Palette,
@@ -76,6 +78,7 @@ impl FrameState {
             gain_notice: app.gain_notice().filter(|_| !app.show_popup),
             smoothing_notice: app.smoothing_notice().filter(|_| !app.show_popup),
             gap_notice: app.bar_gap_notice().filter(|_| !app.show_popup),
+            fps_notice: app.fps_notice().filter(|_| !app.show_popup),
             bar_gap: app.bar_gap,
             palette: app.palette,
             gain: app.gain,
@@ -127,6 +130,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     if let Some(on) = app.bar_gap_notice().filter(|_| !app.show_popup) {
         let state = if on { "on" } else { "off" };
         render_notice(frame, notice_row, &format!(" bar gap {state} "));
+        notice_row += 1;
+    }
+    if let Some(fps) = app.fps_notice().filter(|_| !app.show_popup) {
+        render_notice(frame, notice_row, &format!(" {fps} fps "));
         notice_row += 1;
     }
     if let Some(color) = app.color_notice().filter(|_| !app.show_popup) {
@@ -342,6 +349,7 @@ fn render_menu(frame: &mut Frame, app: &App) {
             format!("◀ {} ▶", if app.bar_gap { "on" } else { "off" }),
             "G",
         ),
+        ("FPS", format!("◀ {} ▶", app.fps), "F"),
     ];
     let lines: Vec<Line> = rows
         .iter()
