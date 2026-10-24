@@ -200,15 +200,19 @@ impl App {
         self.sync_bar_count();
     }
 
-    /// Shows [`BAR_STEP`] more bars, up to what fits the terminal.
+    /// Shows more bars: the next multiple of [`BAR_STEP`], or what fits the terminal when that
+    /// is less, so the row can fill the width even when the width is not a multiple of the step.
     pub fn increase_bar_count(&mut self) {
-        let target = (self.bar_count + BAR_STEP).min(self.max_bar_count());
+        let next_multiple = (self.bar_count / BAR_STEP + 1) * BAR_STEP;
+        let target = next_multiple.min(self.max_bar_count());
         self.set_chosen_bar_count(target);
     }
 
-    /// Shows [`BAR_STEP`] fewer bars, down to [`MIN_BARS`].
+    /// Shows fewer bars: the previous multiple of [`BAR_STEP`], down to [`MIN_BARS`]. From a count
+    /// that is not a multiple (the terminal's full width) it lands on the multiple below it.
     pub fn decrease_bar_count(&mut self) {
-        let target = self.bar_count.saturating_sub(BAR_STEP).max(MIN_BARS);
+        let previous_multiple = (self.bar_count - 1) / BAR_STEP * BAR_STEP;
+        let target = previous_multiple.max(MIN_BARS);
         self.set_chosen_bar_count(target);
     }
 
@@ -631,8 +635,22 @@ mod tests {
         assert_eq!(app.bar_count, 100);
         assert_eq!(app.max_bar_count(), 100);
 
+        // From the full width it goes back to the multiple of 8 below, not 100 - 8.
         app.decrease_bar_count();
-        assert_eq!(app.bar_count, 92);
+        assert_eq!(app.bar_count, 96);
+        app.increase_bar_count();
+        assert_eq!(app.bar_count, 100);
+    }
+
+    #[test]
+    fn test_increasing_from_a_non_multiple_goes_to_the_next_multiple() {
+        // 36 bars fit now; after the terminal widens the next step is 40, not 44.
+        let mut app = app_with_width(72);
+        app.increase_bar_count();
+        assert_eq!(app.bar_count, 36);
+        app.set_terminal_width(400);
+        app.increase_bar_count();
+        assert_eq!(app.bar_count, 40);
     }
 
     #[test]
@@ -692,9 +710,9 @@ mod tests {
 
         app.decrease_bar_count();
 
-        assert_eq!(app.bar_count, 52);
+        assert_eq!(app.bar_count, 56);
         app.set_terminal_width(400);
-        assert_eq!(app.bar_count, 52);
+        assert_eq!(app.bar_count, 56);
     }
 
     #[test]
