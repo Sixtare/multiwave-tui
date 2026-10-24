@@ -3,6 +3,8 @@ use ratatui::style::Color;
 /// Hue, in degrees, of the last bar in rainbow mode: red at the first bar through violet. It stops
 /// short of 360 so the end does not wrap back to red.
 const RAINBOW_END_HUE: f32 = 300.0;
+/// Saturation of the rainbow colors, a bit under full so they are not so harsh.
+const RAINBOW_SATURATION: f32 = 0.70;
 
 /// Fraction of its brightness that a color keeps in the mirror reflection.
 const MIRROR_BRIGHTNESS: f32 = 0.5;
@@ -264,9 +266,11 @@ impl Palette {
                 }
             }
             ColorMode::Gradient => self.blend(Self::position(bar, bar_count)),
-            ColorMode::Rainbow => {
-                BarColor::from_hsv(Self::position(bar, bar_count) * RAINBOW_END_HUE, 1.0, 1.0)
-            }
+            ColorMode::Rainbow => BarColor::from_hsv(
+                Self::position(bar, bar_count) * RAINBOW_END_HUE,
+                RAINBOW_SATURATION,
+                1.0,
+            ),
         }
     }
 
@@ -635,17 +639,17 @@ mod tests {
             mode: ColorMode::Rainbow,
             ..Palette::default()
         };
-        assert_eq!(palette.bar_color(0, 32), BarColor::rgb(255, 0, 0));
+        assert_eq!(palette.bar_color(0, 32), BarColor::rgb(255, 77, 77));
         assert_eq!(
             palette.bar_color(31, 32),
-            BarColor::from_hsv(300.0, 1.0, 1.0)
+            BarColor::from_hsv(300.0, 0.70, 1.0)
         );
-        // The hue only grows along the bars, and every bar is fully saturated.
+        // The hue only grows along the bars, and every bar has the same saturation, 70%.
         let hues: Vec<f32> = (0..32)
             .map(|i| palette.bar_color(i, 32).to_hsv().0)
             .collect();
         assert!(hues.windows(2).all(|pair| pair[0] < pair[1]));
-        assert!((0..32).all(|i| palette.bar_color(i, 32).to_hsv().1 == 1.0));
+        assert!((0..32).all(|i| (palette.bar_color(i, 32).to_hsv().1 - 0.70).abs() < 0.01));
         // Mids and treble rows, and the bass one, are grayed out; the mode and mirror stay.
         assert!(palette.row_selectable(0) && palette.row_selectable(Palette::MIRROR_ROW));
         assert!((1..=3).all(|row| !palette.row_selectable(row)));

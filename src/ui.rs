@@ -811,7 +811,7 @@ mod tests {
         };
         let buffer = render_bars_with(&[1.0; 32], 80, 7, &palette);
 
-        assert_eq!(buffer[(8, 0)].fg, Color::Rgb(255, 0, 0));
+        assert_eq!(buffer[(8, 0)].fg, Color::Rgb(255, 77, 77));
         assert_eq!(buffer[(70, 0)].fg, palette.bar_color(31, 32).color());
         assert_ne!(buffer[(8, 0)].fg, buffer[(40, 0)].fg);
     }
