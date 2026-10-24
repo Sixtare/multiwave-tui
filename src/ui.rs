@@ -1211,7 +1211,7 @@ mod tests {
         // Bars are two columns wide: first is the bass color, last the treble color, and no two
         // neighbouring bars share a color.
         assert_eq!(buffer[(0, 0)].fg, Color::Rgb(0, 255, 255));
-        assert_eq!(buffer[(62, 0)].fg, Color::Rgb(255, 0, 255));
+        assert_eq!(buffer[(62, 0)].fg, Color::Rgb(255, 50, 200));
         let colors: Vec<Color> = (0..32).map(|bar| buffer[(bar * 2, 0)].fg).collect();
         assert!(colors.windows(2).all(|pair| pair[0] != pair[1]));
         // The mirror is the same blend, darker.

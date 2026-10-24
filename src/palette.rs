@@ -19,8 +19,8 @@ pub struct BarColor {
 
 impl BarColor {
     pub const CYAN: BarColor = BarColor::rgb(0, 255, 255);
-    pub const GREEN: BarColor = BarColor::rgb(0, 205, 0);
-    pub const MAGENTA: BarColor = BarColor::rgb(255, 0, 255);
+    pub const BLUE: BarColor = BarColor::rgb(80, 120, 255);
+    pub const PINK: BarColor = BarColor::rgb(255, 50, 200);
 
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
@@ -166,7 +166,7 @@ impl Default for Palette {
     fn default() -> Self {
         Self {
             mode: ColorMode::Single,
-            bands: [BarColor::CYAN, BarColor::GREEN, BarColor::MAGENTA],
+            bands: [BarColor::CYAN, BarColor::BLUE, BarColor::PINK],
             mirror_dimmed: true,
         }
     }
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(palette.mode, ColorMode::Single);
         assert_eq!(
             palette.bands,
-            [BarColor::CYAN, BarColor::GREEN, BarColor::MAGENTA]
+            [BarColor::CYAN, BarColor::BLUE, BarColor::PINK]
         );
         for bar in [0, 15, 31] {
             assert_eq!(palette.bar_color(bar, 32), BarColor::CYAN);
@@ -377,7 +377,7 @@ mod tests {
     fn test_hsv_conversion_round_trips() {
         for color in [
             BarColor::CYAN,
-            BarColor::GREEN,
+            BarColor::BLUE,
             BarColor::rgb(255, 0, 0),
             BarColor::rgb(12, 200, 99),
             BarColor::rgb(128, 128, 128),
@@ -459,7 +459,7 @@ mod tests {
         // The mids and treble colors come back with the other modes.
         palette.mode = ColorMode::Gradient;
         assert!(palette.row_selectable(2));
-        assert_eq!(palette.bands, [custom, BarColor::GREEN, BarColor::MAGENTA]);
+        assert_eq!(palette.bands, [custom, BarColor::BLUE, BarColor::PINK]);
     }
 
     #[test]
@@ -624,6 +624,6 @@ mod tests {
         // By default the mids and treble follow the bass.
         assert_eq!(palette.row_color(3), Some(BarColor::CYAN));
         palette.mode = ColorMode::Gradient;
-        assert_eq!(palette.row_color(3), Some(BarColor::MAGENTA));
+        assert_eq!(palette.row_color(3), Some(BarColor::PINK));
     }
 }
