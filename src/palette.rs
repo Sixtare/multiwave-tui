@@ -1,5 +1,9 @@
 use ratatui::style::Color;
 
+/// Hue, in degrees, of the last bar in rainbow mode: red at the first bar through violet. It stops
+/// short of 360 so the end does not wrap back to red.
+const RAINBOW_END_HUE: f32 = 300.0;
+
 /// Fraction of its brightness that a color keeps in the mirror reflection.
 const MIRROR_BRIGHTNESS: f32 = 0.5;
 
@@ -106,6 +110,9 @@ pub enum ColorMode {
     Bands,
     /// A smooth blend: bass at the left end, mids in the middle and treble at the right end.
     Gradient,
+    /// The colors of the rainbow along the bars, from red at the first bar to violet at the last.
+    /// It does not use the picked colors.
+    Rainbow,
     /// A smooth blend up every bar: bass at the base, mids halfway and treble at the top.
     Vertical,
     /// The bass color on every bar.
@@ -117,7 +124,8 @@ impl ColorMode {
     pub fn next(self) -> ColorMode {
         match self {
             ColorMode::Single => ColorMode::Gradient,
-            ColorMode::Gradient => ColorMode::Vertical,
+            ColorMode::Gradient => ColorMode::Rainbow,
+            ColorMode::Rainbow => ColorMode::Vertical,
             ColorMode::Vertical => ColorMode::Bands,
             ColorMode::Bands => ColorMode::Single,
         }
@@ -128,7 +136,8 @@ impl ColorMode {
         match self {
             ColorMode::Single => ColorMode::Bands,
             ColorMode::Gradient => ColorMode::Single,
-            ColorMode::Vertical => ColorMode::Gradient,
+            ColorMode::Rainbow => ColorMode::Gradient,
+            ColorMode::Vertical => ColorMode::Rainbow,
             ColorMode::Bands => ColorMode::Vertical,
         }
     }
@@ -137,6 +146,7 @@ impl ColorMode {
         match self {
             ColorMode::Bands => "Bands",
             ColorMode::Gradient => "Gradient",
+            ColorMode::Rainbow => "Rainbow",
             ColorMode::Vertical => "Vertical gradient",
             ColorMode::Single => "Single color",
         }
@@ -172,9 +182,16 @@ impl Palette {
     pub const MIRROR_ROW: usize = 4;
 
     /// Whether the cursor can rest on `row`. In single-color mode the mids and treble are grayed
-    /// out.
+    /// out, and in rainbow mode all three colors are, since none of them is used.
     pub fn row_selectable(&self, row: usize) -> bool {
-        row < Self::ROWS && !(self.mode == ColorMode::Single && (2..=3).contains(&row))
+        if row >= Self::ROWS {
+            return false;
+        }
+        match self.mode {
+            ColorMode::Single => !(2..=3).contains(&row),
+            ColorMode::Rainbow => !(1..=3).contains(&row),
+            _ => true,
+        }
     }
 
     /// The next selectable row after `row`, wrapping around.
@@ -246,15 +263,19 @@ impl Palette {
                     treble
                 }
             }
-            ColorMode::Gradient => {
-                // Bass at the first bar, mids at the middle one and treble at the last.
-                let t = if bar_count > 1 {
-                    bar as f32 / (bar_count - 1) as f32
-                } else {
-                    0.0
-                };
-                self.blend(t)
+            ColorMode::Gradient => self.blend(Self::position(bar, bar_count)),
+            ColorMode::Rainbow => {
+                BarColor::from_hsv(Self::position(bar, bar_count) * RAINBOW_END_HUE, 1.0, 1.0)
             }
+        }
+    }
+
+    /// Where bar `bar` sits along the row: 0 at the first bar, 1 at the last.
+    fn position(bar: usize, bar_count: usize) -> f32 {
+        if bar_count > 1 {
+            bar as f32 / (bar_count - 1) as f32
+        } else {
+            0.0
         }
     }
 
@@ -430,6 +451,7 @@ mod tests {
         assert_eq!(palette.mode, ColorMode::Single);
         for expected in [
             ColorMode::Gradient,
+            ColorMode::Rainbow,
             ColorMode::Vertical,
             ColorMode::Bands,
             ColorMode::Single,
@@ -441,6 +463,7 @@ mod tests {
         for expected in [
             ColorMode::Bands,
             ColorMode::Vertical,
+            ColorMode::Rainbow,
             ColorMode::Gradient,
             ColorMode::Single,
         ] {
@@ -604,6 +627,30 @@ mod tests {
         // The checkbox row never edits a band.
         palette.set_row_color(Palette::MIRROR_ROW, BarColor::rgb(255, 0, 0));
         assert_eq!(palette.bands[0], BarColor::CYAN);
+    }
+
+    #[test]
+    fn test_rainbow_runs_from_red_to_violet_and_ignores_the_picked_colors() {
+        let palette = Palette {
+            mode: ColorMode::Rainbow,
+            ..Palette::default()
+        };
+        assert_eq!(palette.bar_color(0, 32), BarColor::rgb(255, 0, 0));
+        assert_eq!(
+            palette.bar_color(31, 32),
+            BarColor::from_hsv(300.0, 1.0, 1.0)
+        );
+        // The hue only grows along the bars, and every bar is fully saturated.
+        let hues: Vec<f32> = (0..32)
+            .map(|i| palette.bar_color(i, 32).to_hsv().0)
+            .collect();
+        assert!(hues.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!((0..32).all(|i| palette.bar_color(i, 32).to_hsv().1 == 1.0));
+        // Mids and treble rows, and the bass one, are grayed out; the mode and mirror stay.
+        assert!(palette.row_selectable(0) && palette.row_selectable(Palette::MIRROR_ROW));
+        assert!((1..=3).all(|row| !palette.row_selectable(row)));
+        assert_eq!(palette.next_row(0, true), Palette::MIRROR_ROW);
+        assert_eq!(palette.describe(), "Rainbow");
     }
 
     #[test]

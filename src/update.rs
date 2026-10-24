@@ -333,7 +333,12 @@ mod tests {
         assert_eq!(app.palette.mode, ColorMode::Single);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.palette.mode, ColorMode::Single);
-        for expected in [ColorMode::Gradient, ColorMode::Vertical, ColorMode::Bands] {
+        for expected in [
+            ColorMode::Gradient,
+            ColorMode::Rainbow,
+            ColorMode::Vertical,
+            ColorMode::Bands,
+        ] {
             press(&mut app, KeyCode::Right);
             assert_eq!(app.palette.mode, expected);
         }
