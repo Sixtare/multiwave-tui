@@ -15,15 +15,31 @@ use cpal::{
 
 use crate::audio_processor::{AudioProcessor, MAX_BAR_COUNT};
 use crate::event::Event;
+use crate::pulse::{self, MonitorSource, PulseCapture};
 
 const DEFAULT_DEVICE_KEY: &str = "__default_output__";
 const DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Where an entry's audio comes from.
+enum Source {
+    /// A cpal device (WASAPI render endpoint on Windows, ALSA PCM on Linux without `pactl`).
+    Cpal(Device),
+    /// The monitor of an output on a PulseAudio/PipeWire server, recorded with `parec`.
+    Pulse(MonitorSource),
+}
+
+/// A running capture; dropping it stops the audio, which is all the fields are kept for.
+#[allow(dead_code)]
+enum Capture {
+    Cpal(Stream),
+    Pulse(PulseCapture),
+}
 
 struct DeviceEntry {
     name: String,
     key: String,
     is_default: bool,
-    device: Device,
+    source: Source,
 }
 
 struct DeviceList {
@@ -55,7 +71,7 @@ pub struct SoundDevice {
     pub info: String,
     devices: Vec<DeviceEntry>,
     pub active_idx: usize,
-    _stream: Option<Stream>,
+    _capture: Option<Capture>,
     default_key: Option<String>,
     last_device_check: Instant,
     /// Settings the capture callback reads on every block, so they can change without
@@ -108,16 +124,64 @@ impl SoundDevice {
     /// On Linux, internal ALSA aliases and raw `hw:` duplicates are filtered out. On Windows,
     /// active render endpoints are listed and deduplicated by their stable cpal device id,
     /// because two different endpoints may share the same friendly name.
-    pub fn list_output_devices() -> Vec<(String, Device)> {
+    pub fn list_output_devices() -> Vec<String> {
         Self::enumerate_output_devices()
             .entries
             .into_iter()
-            .map(|entry| (entry.name, entry.device))
+            .map(|entry| entry.name)
             .collect()
     }
 
     fn enumerate_output_devices() -> DeviceList {
         Self::init_capture_env();
+        if cfg!(target_os = "linux")
+            && let Some(list) = Self::enumerate_pulse_devices()
+        {
+            return list;
+        }
+        Self::enumerate_cpal_devices()
+    }
+
+    /// Lists the outputs of a PulseAudio/PipeWire server through their monitor sources: one
+    /// row per real output, named like the desktop names it. `None` when `pactl` is missing,
+    /// the server does not answer or there is no output, so cpal can take over.
+    fn enumerate_pulse_devices() -> Option<DeviceList> {
+        let monitors = pulse::list_monitors().filter(|monitors| !monitors.is_empty())?;
+        let default_sink = pulse::default_sink();
+        let default_monitor = default_sink.as_ref().map(|sink| format!("{sink}.monitor"));
+        let default = monitors
+            .iter()
+            .find(|monitor| Some(&monitor.name) == default_monitor.as_ref())
+            .unwrap_or(&monitors[0])
+            .clone();
+
+        // The default output is the first row and follows the system; its own monitor is not
+        // listed a second time.
+        let mut entries = vec![DeviceEntry {
+            name: format!("Default Output ({})", default.description),
+            key: DEFAULT_DEVICE_KEY.to_string(),
+            is_default: true,
+            source: Source::Pulse(default.clone()),
+        }];
+        entries.extend(
+            monitors
+                .into_iter()
+                .filter(|monitor| monitor.name != default.name)
+                .map(|monitor| DeviceEntry {
+                    name: monitor.description.clone(),
+                    key: monitor.name.clone(),
+                    is_default: false,
+                    source: Source::Pulse(monitor),
+                }),
+        );
+
+        Some(DeviceList {
+            entries,
+            default_key: Some(default_sink.unwrap_or(default.name)),
+        })
+    }
+
+    fn enumerate_cpal_devices() -> DeviceList {
         let host = cpal::default_host();
         let mut entries = Vec::new();
         let mut default_key = None;
@@ -133,7 +197,7 @@ impl SoundDevice {
                 name: format!("Default Output ({})", default_name),
                 key: DEFAULT_DEVICE_KEY.to_string(),
                 is_default: true,
-                device: default_dev,
+                source: Source::Cpal(default_dev),
             });
         }
 
@@ -197,7 +261,7 @@ impl SoundDevice {
                         name,
                         key,
                         is_default: false,
-                        device: dev,
+                        source: Source::Cpal(dev),
                     });
                 }
             }
@@ -232,7 +296,7 @@ impl SoundDevice {
             info,
             devices: list.entries,
             active_idx: 0,
-            _stream: None,
+            _capture: None,
             default_key: list.default_key,
             last_device_check: Instant::now(),
             settings: Arc::new(CaptureSettings {
@@ -280,137 +344,22 @@ impl SoundDevice {
 
         let entry = &self.devices[index];
         let device_name = entry.name.clone();
-        let device = entry.device.clone();
-
-        let (config, sample_format) = Self::get_device_config(&device)?;
-
-        let device_info = format!(
-            "Device: {}, Sample Rate: {}Hz, Channels: {}, Format: {:?}",
-            device_name, config.sample_rate, config.channels, sample_format
-        );
-
-        let channels = config.channels as usize;
         let settings = Arc::clone(&self.settings);
-        let mut processor = AudioProcessor::new(
-            channels,
-            config.sample_rate,
-            settings.bar_count.load(Ordering::Relaxed),
-        );
-        processor.set_manual_gain(settings.manual_gain());
-        processor.set_smoothing(settings.smoothing.load(Ordering::Relaxed));
 
-        let error_sender = sender.clone();
-        let stream = match sample_format {
-            SampleFormat::I8 => build_capture_stream::<i8>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::I16 => build_capture_stream::<i16>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::I24 => build_capture_stream::<cpal::I24>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::I32 => build_capture_stream::<i32>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::I64 => build_capture_stream::<i64>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::U8 => build_capture_stream::<u8>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::U16 => build_capture_stream::<u16>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::U24 => build_capture_stream::<cpal::U24>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::U32 => build_capture_stream::<u32>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::U64 => build_capture_stream::<u64>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::F32 => build_capture_stream::<f32>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::F64 => build_capture_stream::<f64>(
-                &device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            sample_fmt => {
-                return Err(color_eyre::eyre::eyre!(
-                    "Unsupported sample format: {:?}",
-                    sample_fmt
-                ));
+        let (capture, device_info) = match &entry.source {
+            Source::Cpal(device) => {
+                Self::start_cpal_capture(device, &device_name, settings, sender)?
+            }
+            Source::Pulse(monitor) => {
+                Self::start_pulse_capture(monitor, &device_name, settings, sender)?
             }
         };
 
-        stream.play()?;
-        // Replace the old stream only after the new one is built and playing. If the switch
-        // fails, the previous capture keeps running instead of leaving the app silent.
-        self._stream = Some(stream);
+        // Replace the old capture only after the new one is running. If the switch fails, the
+        // previous capture keeps running instead of leaving the app silent.
+        self._capture = Some(capture);
 
-        // Only commit the new device state after the stream starts successfully, so a failed
+        // Only commit the new device state after the capture starts successfully, so a failed
         // switch does not leave the UI pointing at a device that is not actually capturing.
         self.name = device_name;
         self.info = device_info;
@@ -454,6 +403,11 @@ impl SoundDevice {
     }
 
     fn current_default_key() -> Option<String> {
+        if cfg!(target_os = "linux")
+            && let Some(sink) = pulse::default_sink()
+        {
+            return Some(sink);
+        }
         let host = cpal::default_host();
         host.default_output_device().map(|device| {
             let name = device
@@ -555,6 +509,178 @@ impl SoundDevice {
             changed,
             message,
         }
+    }
+
+    fn start_cpal_capture(
+        device: &Device,
+        device_name: &str,
+        settings: Arc<CaptureSettings>,
+        sender: mpsc::Sender<Event>,
+    ) -> Result<(Capture, String)> {
+        let (config, sample_format) = Self::get_device_config(device)?;
+
+        let device_info = format!(
+            "Device: {}, Sample Rate: {}Hz, Channels: {}, Format: {:?}",
+            device_name, config.sample_rate, config.channels, sample_format
+        );
+
+        let channels = config.channels as usize;
+        let mut processor = AudioProcessor::new(
+            channels,
+            config.sample_rate,
+            settings.bar_count.load(Ordering::Relaxed),
+        );
+        processor.set_manual_gain(settings.manual_gain());
+        processor.set_smoothing(settings.smoothing.load(Ordering::Relaxed));
+
+        let error_sender = sender.clone();
+        let stream = match sample_format {
+            SampleFormat::I8 => build_capture_stream::<i8>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            SampleFormat::I16 => build_capture_stream::<i16>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            SampleFormat::I24 => build_capture_stream::<cpal::I24>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            SampleFormat::I32 => build_capture_stream::<i32>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            SampleFormat::I64 => build_capture_stream::<i64>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            SampleFormat::U8 => build_capture_stream::<u8>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            SampleFormat::U16 => build_capture_stream::<u16>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            SampleFormat::U24 => build_capture_stream::<cpal::U24>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            SampleFormat::U32 => build_capture_stream::<u32>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            SampleFormat::U64 => build_capture_stream::<u64>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            SampleFormat::F32 => build_capture_stream::<f32>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            SampleFormat::F64 => build_capture_stream::<f64>(
+                device,
+                &config,
+                processor,
+                sender,
+                error_sender,
+                settings.clone(),
+            )?,
+            sample_fmt => {
+                return Err(color_eyre::eyre::eyre!(
+                    "Unsupported sample format: {:?}",
+                    sample_fmt
+                ));
+            }
+        };
+
+        stream.play()?;
+        Ok((Capture::Cpal(stream), device_info))
+    }
+
+    /// Records an output's monitor with `parec`, feeding the same processor the cpal path uses.
+    fn start_pulse_capture(
+        monitor: &MonitorSource,
+        device_name: &str,
+        settings: Arc<CaptureSettings>,
+        sender: mpsc::Sender<Event>,
+    ) -> Result<(Capture, String)> {
+        let device_info = format!(
+            "Device: {}, Sample Rate: {}Hz, Channels: {}, Format: F32 (parec)",
+            device_name, monitor.rate, monitor.channels
+        );
+        let mut processor = AudioProcessor::new(
+            monitor.channels as usize,
+            monitor.rate,
+            settings.bar_count.load(Ordering::Relaxed),
+        );
+        processor.set_manual_gain(settings.manual_gain());
+        processor.set_smoothing(settings.smoothing.load(Ordering::Relaxed));
+
+        let bars_sender = sender.clone();
+        let capture = PulseCapture::start(
+            monitor,
+            move |samples| {
+                processor.set_num_bars(settings.bar_count.load(Ordering::Relaxed));
+                processor.set_manual_gain(settings.manual_gain());
+                processor.set_smoothing(settings.smoothing.load(Ordering::Relaxed));
+                for bars in processor.process_interleaved_samples(samples) {
+                    let _ = bars_sender.send(Event::AudioBars(bars));
+                }
+            },
+            move || {
+                let _ = sender.send(Event::AudioDeviceLost);
+            },
+        )
+        .map_err(|error| {
+            color_eyre::eyre::eyre!("Failed to start parec (install pulseaudio-utils): {error}")
+        })?;
+        Ok((Capture::Pulse(capture), device_info))
     }
 
     fn get_device_config(device: &Device) -> Result<(StreamConfig, SampleFormat)> {
