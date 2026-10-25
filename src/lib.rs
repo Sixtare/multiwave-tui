@@ -2,6 +2,7 @@ pub mod app;
 pub mod audio_processor;
 pub mod color_picker;
 pub mod event;
+pub mod notices;
 pub mod palette;
 pub mod pulse;
 pub mod sound_device;
