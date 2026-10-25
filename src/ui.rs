@@ -34,16 +34,8 @@ pub struct FrameState {
     active_device_idx: usize,
     device_scroll_offset: usize,
     audio_error: Option<String>,
-    /// Bar count announcement, while it is on screen.
-    bar_notice: Option<usize>,
-    /// Sensitivity announcement, while it is on screen.
-    gain_notice: Option<f32>,
-    /// Smoothing announcement, while it is on screen.
-    smoothing_notice: Option<bool>,
-    /// Bar gap announcement, while it is on screen.
-    gap_notice: Option<bool>,
-    /// Frame rate announcement, while it is on screen.
-    fps_notice: Option<u32>,
+    /// Announcements on screen, top to bottom; none while the device popup is open.
+    notices: Vec<String>,
     /// Whether a blank column separates the bars.
     bar_gap: bool,
     palette: Palette,
@@ -51,8 +43,6 @@ pub struct FrameState {
     gain: f32,
     color_row: usize,
     color_picker: Option<ColorPicker>,
-    /// Color announcement, while it is on screen.
-    color_notice: Option<String>,
 }
 
 impl FrameState {
@@ -73,17 +63,16 @@ impl FrameState {
             active_device_idx: app.active_device_idx,
             device_scroll_offset: app.device_scroll_offset,
             audio_error: app.audio_error.clone(),
-            bar_notice: app.bar_notice().filter(|_| !devices_open),
-            gain_notice: app.gain_notice().filter(|_| !devices_open),
-            smoothing_notice: app.smoothing_notice().filter(|_| !devices_open),
-            gap_notice: app.bar_gap_notice().filter(|_| !devices_open),
-            fps_notice: app.fps_notice().filter(|_| !devices_open),
+            notices: if devices_open {
+                Vec::new()
+            } else {
+                app.visible_notices()
+            },
             bar_gap: app.bar_gap,
             palette: app.palette,
             gain: app.gain,
             color_row: app.color.row,
             color_picker: app.color.picker.clone(),
-            color_notice: app.color_notice().filter(|_| !devices_open),
         }
     }
 }
@@ -112,31 +101,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     }
 
     // Notices stack down the top-right corner, so changing both settings at once shows both.
-    let mut notice_row = 0;
-    if let Some(count) = app.bar_notice().filter(|_| !devices_open) {
-        render_notice(frame, notice_row, &format!(" {count} bars "));
-        notice_row += 1;
-    }
-    if let Some(gain) = app.gain_notice().filter(|_| !devices_open) {
-        render_notice(frame, notice_row, &format!(" sensitivity {gain:.2}x "));
-        notice_row += 1;
-    }
-    if let Some(on) = app.smoothing_notice().filter(|_| !devices_open) {
-        let state = if on { "on" } else { "off" };
-        render_notice(frame, notice_row, &format!(" smoothing {state} "));
-        notice_row += 1;
-    }
-    if let Some(on) = app.bar_gap_notice().filter(|_| !devices_open) {
-        let state = if on { "on" } else { "off" };
-        render_notice(frame, notice_row, &format!(" bar gap {state} "));
-        notice_row += 1;
-    }
-    if let Some(fps) = app.fps_notice().filter(|_| !devices_open) {
-        render_notice(frame, notice_row, &format!(" {fps} fps "));
-        notice_row += 1;
-    }
-    if let Some(color) = app.color_notice().filter(|_| !devices_open) {
-        render_notice(frame, notice_row, &format!(" color: {color} "));
+    if !devices_open {
+        for (row, text) in app.visible_notices().iter().enumerate() {
+            render_notice(frame, row as u16, text);
+        }
     }
 
     if let Some(error) = &app.audio_error {
@@ -968,7 +936,7 @@ mod tests {
         }
         let after = FrameState::capture(&app, SIZE);
         assert_ne!(during, after);
-        assert_eq!(after.bar_notice, None);
+        assert!(after.notices.is_empty());
     }
 
     #[test]
@@ -1045,7 +1013,7 @@ mod tests {
         }
         let after = FrameState::capture(&app, SIZE);
         assert_ne!(during, after);
-        assert_eq!(after.gain_notice, None);
+        assert!(after.notices.is_empty());
     }
 
     #[test]
@@ -1056,12 +1024,12 @@ mod tests {
         app.toggle_smoothing();
         let during = FrameState::capture(&app, SIZE);
         assert_ne!(before, during);
-        assert_eq!(during.smoothing_notice, Some(true));
+        assert_eq!(during.notices, [" smoothing on "]);
 
         for _ in 0..90 {
             app.tick();
         }
-        assert_eq!(FrameState::capture(&app, SIZE).smoothing_notice, None);
+        assert!(FrameState::capture(&app, SIZE).notices.is_empty());
     }
 
     #[test]
@@ -1252,8 +1220,8 @@ mod tests {
         let top_row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
         assert!(top_row.ends_with(" color: Gradient "), "{top_row:?}");
         assert_eq!(
-            FrameState::capture(&app, SIZE).color_notice.as_deref(),
-            Some("Gradient")
+            FrameState::capture(&app, SIZE).notices,
+            [" color: Gradient "]
         );
     }
 

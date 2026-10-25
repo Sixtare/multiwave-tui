@@ -445,6 +445,25 @@ impl App {
         }
     }
 
+    /// The text of every notice on screen, in the order they stack down the top-right corner.
+    pub fn visible_notices(&self) -> Vec<String> {
+        let on_off = |on: bool| if on { "on" } else { "off" };
+        [
+            self.bar_notice().map(|count| format!(" {count} bars ")),
+            self.gain_notice()
+                .map(|gain| format!(" sensitivity {gain:.2}x ")),
+            self.smoothing_notice()
+                .map(|on| format!(" smoothing {} ", on_off(on))),
+            self.bar_gap_notice()
+                .map(|on| format!(" bar gap {} ", on_off(on))),
+            self.fps_notice().map(|fps| format!(" {fps} fps ")),
+            self.color_notice().map(|color| format!(" color: {color} ")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
     /// The color choice to announce on screen right after the user confirmed it.
     pub fn color_notice(&self) -> Option<String> {
         self.notice_active(NoticeKind::Color)
@@ -1073,6 +1092,21 @@ mod tests {
             let at = fall_after_one_second(fps);
             assert!((at - at_60).abs() < 0.01, "{fps} fps: {at} vs {at_60}");
         }
+    }
+
+    #[test]
+    fn test_visible_notices_stack_in_a_fixed_order() {
+        let mut app = app_with_width(200);
+        assert!(app.visible_notices().is_empty());
+
+        app.increase_gain();
+        app.toggle_bar_gap();
+        app.increase_bar_count();
+
+        assert_eq!(
+            app.visible_notices(),
+            [" 40 bars ", " sensitivity 1.10x ", " bar gap off "]
+        );
     }
 
     #[test]
