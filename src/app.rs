@@ -1,7 +1,7 @@
 use crate::{
-    color_picker::ColorPicker,
+    color_session::ColorSession,
     notices::{NoticeKind, Notices},
-    palette::{BarColor, Palette},
+    palette::Palette,
 };
 
 /// Fewest bars the visualizer shows, even on a terminal too narrow to fit them.
@@ -94,14 +94,8 @@ pub struct App {
     pub audio_error: Option<String>,
     /// How the bars are colored. While the color popup is open it holds the live preview.
     pub palette: Palette,
-    /// Highlighted row of the color popup (0 is the mode row).
-    pub color_row: usize,
-    /// Palette from before the color popup opened, to tell whether it changed.
-    palette_at_open: Palette,
-    /// The color picker, while it is open for the highlighted row.
-    pub color_picker: Option<ColorPicker>,
-    /// Color of the edited row from before the color picker opened, restored when it is cancelled.
-    color_before_picker: BarColor,
+    /// The open (or last) visit to the bar color popup.
+    pub color: ColorSession,
 }
 
 impl Default for App {
@@ -130,10 +124,7 @@ impl Default for App {
             device_scroll_offset: 0,
             audio_error: None,
             palette: Palette::default(),
-            color_row: 0,
-            palette_at_open: Palette::default(),
-            color_picker: None,
-            color_before_picker: BarColor::CYAN,
+            color: ColorSession::default(),
         }
     }
 }
@@ -444,9 +435,7 @@ impl App {
     /// Opens the color popup.
     pub fn open_color_popup(&mut self) {
         self.return_to_menu = self.overlay == Overlay::Menu;
-        self.palette_at_open = self.palette;
-        self.color_row = 0;
-        self.color_picker = None;
+        self.color = ColorSession::open(&self.palette);
         self.overlay = Overlay::Colors;
     }
 
@@ -454,61 +443,8 @@ impl App {
     pub fn close_color_popup(&mut self) {
         self.overlay = Overlay::None;
         self.restore_menu();
-        self.color_picker = None;
-        if self.palette != self.palette_at_open {
+        if self.color.close(&self.palette) {
             self.notify(NoticeKind::Color);
-        }
-    }
-
-    /// Moves the color popup cursor down, skipping grayed-out rows.
-    pub fn select_next_color_row(&mut self) {
-        self.color_row = self.palette.next_row(self.color_row, true);
-    }
-
-    /// Moves the color popup cursor up, skipping grayed-out rows.
-    pub fn select_prev_color_row(&mut self) {
-        self.color_row = self.palette.next_row(self.color_row, false);
-    }
-
-    /// Steps the value of the highlighted row with the arrows: the color mode to the next or
-    /// previous one on the mode row, fade on or off on the fade row, its intensity on the level row. Other rows ignore it.
-    pub fn change_color_option(&mut self, forward: bool) {
-        match self.color_row {
-            0 => self.palette.change_mode(forward),
-            Palette::FADE_ROW => self.palette.toggle_fade(),
-            Palette::FADE_LEVEL_ROW => self.palette.step_fade_level(forward),
-            _ => {}
-        }
-    }
-
-    /// Acts on the highlighted row: flips the mirror checkbox, or opens the color picker for a color
-    /// row. The mode, fade and level rows are changed with the arrows instead.
-    pub fn activate_color_row(&mut self) {
-        match self.color_row {
-            0 | Palette::FADE_ROW | Palette::FADE_LEVEL_ROW => {}
-            Palette::MIRROR_ROW => self.palette.toggle_mirror_dimmed(),
-            _ => {
-                if let Some(color) = self.palette.row_color(self.color_row) {
-                    self.color_before_picker = color;
-                    self.color_picker = Some(ColorPicker::new(color));
-                }
-            }
-        }
-    }
-
-    /// Lets `edit` change the open color picker, then previews its color on the bars.
-    pub fn edit_color_picker(&mut self, edit: impl FnOnce(&mut ColorPicker)) {
-        if let Some(picker) = &mut self.color_picker {
-            edit(picker);
-            self.palette.set_row_color(self.color_row, picker.color());
-        }
-    }
-
-    /// Closes the color picker, keeping the previewed color when `confirm` and restoring otherwise.
-    pub fn close_color_picker(&mut self, confirm: bool) {
-        if self.color_picker.take().is_some() && !confirm {
-            self.palette
-                .set_row_color(self.color_row, self.color_before_picker);
         }
     }
 
@@ -541,8 +477,8 @@ fn resample(bars: &[f32], len: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::notices::NOTICE_TICKS;
     use crate::palette::ColorMode;
+    use crate::{notices::NOTICE_TICKS, palette::BarColor};
 
     fn app_with_width(width: u16) -> App {
         let mut app = App::default();
@@ -554,36 +490,37 @@ mod tests {
     fn test_color_picker_previews_and_cancel_restores_the_color() {
         let mut app = App::new();
         app.open_color_popup();
-        app.select_next_color_row();
-        app.activate_color_row();
+        app.color.select_next(&app.palette);
+        app.color.activate(&mut app.palette);
         assert_eq!(
-            app.color_picker.as_ref().map(|p| p.color()),
+            app.color.picker.as_ref().map(|p| p.color()),
             Some(BarColor::CYAN)
         );
-        app.edit_color_picker(|picker| picker.nudge(-10, 5, false));
+        app.color
+            .edit_picker(&mut app.palette, |picker| picker.nudge(-10, 5, false));
         assert_ne!(app.palette.bands[0], BarColor::CYAN);
         assert_eq!(
             app.palette.bands[0],
-            app.color_picker.as_ref().unwrap().color()
+            app.color.picker.as_ref().unwrap().color()
         );
-        app.close_color_picker(false);
+        app.color.close_picker(&mut app.palette, false);
         assert_eq!(app.palette, Palette::default());
-        assert_eq!(app.color_picker, None);
+        assert_eq!(app.color.picker, None);
     }
 
     #[test]
     fn test_color_picker_confirm_keeps_the_color_and_closing_shows_a_notice() {
         let mut app = App::new();
         app.open_color_popup();
-        app.select_next_color_row();
-        app.activate_color_row();
-        app.edit_color_picker(|picker| {
+        app.color.select_next(&app.palette);
+        app.color.activate(&mut app.palette);
+        app.color.edit_picker(&mut app.palette, |picker| {
             picker.next_focus();
             picker.nudge(0, 10, false);
         });
-        let picked = app.color_picker.as_ref().unwrap().color();
+        let picked = app.color.picker.as_ref().unwrap().color();
         assert_ne!(picked, BarColor::CYAN);
-        app.close_color_picker(true);
+        app.color.close_picker(&mut app.palette, true);
         assert_eq!(app.palette.bands[0], picked);
         assert_eq!(app.color_notice(), None);
 
@@ -608,45 +545,45 @@ mod tests {
         let mut app = App::new();
         assert_eq!(app.palette.mode, ColorMode::Single);
         app.open_color_popup();
-        app.select_prev_color_row();
-        assert_eq!(app.color_row, 6);
-        app.select_next_color_row();
-        assert_eq!(app.color_row, 0);
+        app.color.select_prev(&app.palette);
+        assert_eq!(app.color.row, 6);
+        app.color.select_next(&app.palette);
+        assert_eq!(app.color.row, 0);
         // Single color skips the mids and treble rows.
-        app.select_next_color_row();
-        app.select_next_color_row();
-        assert_eq!(app.color_row, 4);
-        app.select_next_color_row();
-        assert_eq!(app.color_row, 5);
-        app.select_next_color_row();
-        assert_eq!(app.color_row, 6);
-        app.select_next_color_row();
+        app.color.select_next(&app.palette);
+        app.color.select_next(&app.palette);
+        assert_eq!(app.color.row, 4);
+        app.color.select_next(&app.palette);
+        assert_eq!(app.color.row, 5);
+        app.color.select_next(&app.palette);
+        assert_eq!(app.color.row, 6);
+        app.color.select_next(&app.palette);
 
         // Enter does nothing on the mode row; the arrows change the mode.
-        app.activate_color_row();
+        app.color.activate(&mut app.palette);
         assert_eq!(app.palette.mode, ColorMode::Single);
-        app.change_color_option(true);
+        app.color.change_option(&mut app.palette, true);
         assert_eq!(app.palette.mode, ColorMode::Gradient);
-        app.change_color_option(false);
+        app.color.change_option(&mut app.palette, false);
         assert_eq!(app.palette.mode, ColorMode::Single);
-        app.change_color_option(true);
-        assert_eq!(app.color_picker, None);
-        app.select_prev_color_row();
-        assert_eq!(app.color_row, 6);
-        app.select_prev_color_row();
-        assert_eq!(app.color_row, 5);
-        app.select_prev_color_row();
-        assert_eq!(app.color_row, 4);
-        app.select_prev_color_row();
-        assert_eq!(app.color_row, 3);
+        app.color.change_option(&mut app.palette, true);
+        assert_eq!(app.color.picker, None);
+        app.color.select_prev(&app.palette);
+        assert_eq!(app.color.row, 6);
+        app.color.select_prev(&app.palette);
+        assert_eq!(app.color.row, 5);
+        app.color.select_prev(&app.palette);
+        assert_eq!(app.color.row, 4);
+        app.color.select_prev(&app.palette);
+        assert_eq!(app.color.row, 3);
     }
 
     #[test]
     fn test_changing_the_mode_only_works_on_the_mode_row() {
         let mut app = App::new();
         app.open_color_popup();
-        app.select_next_color_row();
-        app.change_color_option(true);
+        app.color.select_next(&app.palette);
+        app.color.change_option(&mut app.palette, true);
         assert_eq!(app.palette.mode, ColorMode::Single);
     }
 
@@ -654,43 +591,43 @@ mod tests {
     fn test_fade_row_is_switched_with_the_arrows() {
         let mut app = App::new();
         app.open_color_popup();
-        app.select_prev_color_row();
-        app.select_prev_color_row();
-        app.select_prev_color_row();
-        assert_eq!(app.color_row, Palette::FADE_ROW);
+        app.color.select_prev(&app.palette);
+        app.color.select_prev(&app.palette);
+        app.color.select_prev(&app.palette);
+        assert_eq!(app.color.row, Palette::FADE_ROW);
         assert!(app.palette.fade);
         // Enter does nothing; the arrows switch it between on and off.
-        app.activate_color_row();
+        app.color.activate(&mut app.palette);
         assert!(app.palette.fade);
-        app.change_color_option(false);
+        app.color.change_option(&mut app.palette, false);
         assert!(!app.palette.fade);
-        app.change_color_option(true);
+        app.color.change_option(&mut app.palette, true);
         assert!(app.palette.fade);
-        assert_eq!(app.color_picker, None);
+        assert_eq!(app.color.picker, None);
 
         // The level row steps the intensity by a tenth, and is skipped while the fade is off.
-        app.select_next_color_row();
-        assert_eq!(app.color_row, Palette::FADE_LEVEL_ROW);
-        app.change_color_option(true);
+        app.color.select_next(&app.palette);
+        assert_eq!(app.color.row, Palette::FADE_LEVEL_ROW);
+        app.color.change_option(&mut app.palette, true);
         assert_eq!(app.palette.fade_level, 6);
-        app.change_color_option(false);
-        app.change_color_option(false);
+        app.color.change_option(&mut app.palette, false);
+        app.color.change_option(&mut app.palette, false);
         assert_eq!(app.palette.fade_level, 4);
-        app.select_prev_color_row();
-        app.change_color_option(false);
+        app.color.select_prev(&app.palette);
+        app.color.change_option(&mut app.palette, false);
         assert!(!app.palette.fade);
-        app.select_next_color_row();
-        assert_eq!(app.color_row, Palette::MIRROR_ROW);
+        app.color.select_next(&app.palette);
+        assert_eq!(app.color.row, Palette::MIRROR_ROW);
     }
 
     #[test]
     fn test_mirror_row_toggles_the_checkbox_without_opening_the_list() {
         let mut app = App::new();
         app.open_color_popup();
-        app.select_prev_color_row();
-        app.activate_color_row();
+        app.color.select_prev(&app.palette);
+        app.color.activate(&mut app.palette);
         assert!(!app.palette.mirror_dimmed);
-        assert_eq!(app.color_picker, None);
+        assert_eq!(app.color.picker, None);
         app.close_color_popup();
         assert!(app.color_notice().is_some());
     }

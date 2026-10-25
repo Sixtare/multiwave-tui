@@ -13,6 +13,9 @@ pub mod notices;
 /// Custom color picker state.
 pub mod color_picker;
 
+/// State of one visit to the bar color popup.
+pub mod color_session;
+
 /// Bar color palette.
 pub mod palette;
 

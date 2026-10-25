@@ -110,14 +110,24 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
 fn update_color_picker(app: &mut App, key_event: KeyEvent) {
     let fine = key_event.modifiers.contains(KeyModifiers::SHIFT);
     match key_event.code {
-        KeyCode::Esc => app.close_color_picker(false),
-        KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_picker(false),
-        KeyCode::Enter => app.close_color_picker(true),
-        KeyCode::Tab => app.edit_color_picker(ColorPicker::next_focus),
-        KeyCode::Up => app.edit_color_picker(|p| p.nudge(0, -1, fine)),
-        KeyCode::Down => app.edit_color_picker(|p| p.nudge(0, 1, fine)),
-        KeyCode::Left => app.edit_color_picker(|p| p.nudge(-1, 0, fine)),
-        KeyCode::Right => app.edit_color_picker(|p| p.nudge(1, 0, fine)),
+        KeyCode::Esc => app.color.close_picker(&mut app.palette, false),
+        KeyCode::Char('c') | KeyCode::Char('C') => app.color.close_picker(&mut app.palette, false),
+        KeyCode::Enter => app.color.close_picker(&mut app.palette, true),
+        KeyCode::Tab => app
+            .color
+            .edit_picker(&mut app.palette, ColorPicker::next_focus),
+        KeyCode::Up => app
+            .color
+            .edit_picker(&mut app.palette, |p| p.nudge(0, -1, fine)),
+        KeyCode::Down => app
+            .color
+            .edit_picker(&mut app.palette, |p| p.nudge(0, 1, fine)),
+        KeyCode::Left => app
+            .color
+            .edit_picker(&mut app.palette, |p| p.nudge(-1, 0, fine)),
+        KeyCode::Right => app
+            .color
+            .edit_picker(&mut app.palette, |p| p.nudge(1, 0, fine)),
         _ => {}
     }
 }
@@ -176,13 +186,13 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
                 app.quit();
             }
             // While the color picker is open it takes the keys, and Esc only closes the picker.
-            _ if app.color_picker.is_some() => update_color_picker(app, key_event),
+            _ if app.color.picker.is_some() => update_color_picker(app, key_event),
             KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_popup(),
-            KeyCode::Enter => app.activate_color_row(),
-            KeyCode::Left => app.change_color_option(false),
-            KeyCode::Right => app.change_color_option(true),
-            KeyCode::Up => app.select_prev_color_row(),
-            KeyCode::Down => app.select_next_color_row(),
+            KeyCode::Enter => app.color.activate(&mut app.palette),
+            KeyCode::Left => app.color.change_option(&mut app.palette, false),
+            KeyCode::Right => app.color.change_option(&mut app.palette, true),
+            KeyCode::Up => app.color.select_prev(&app.palette),
+            KeyCode::Down => app.color.select_next(&app.palette),
             _ => {}
         }
         return None;
@@ -355,7 +365,7 @@ mod tests {
         }
         press(&mut app, KeyCode::Left);
         assert_eq!(app.palette.mode, ColorMode::Rainbow);
-        assert_eq!(app.color_picker, None);
+        assert_eq!(app.color.picker, None);
         assert_eq!(app.bar_count, 32);
     }
 
@@ -363,7 +373,7 @@ mod tests {
         press(app, KeyCode::Char('c'));
         press(app, KeyCode::Down);
         press(app, KeyCode::Enter);
-        assert!(app.color_picker.is_some());
+        assert!(app.color.picker.is_some());
     }
 
     #[test]
@@ -384,7 +394,7 @@ mod tests {
         assert!(!app.smoothing);
 
         press(&mut app, KeyCode::Enter);
-        assert_eq!(app.color_picker, None);
+        assert_eq!(app.color.picker, None);
         assert!(app.overlay == Overlay::Colors);
         let kept = app.palette.bands[0];
 
@@ -399,13 +409,13 @@ mod tests {
         open_picker_on_bass(&mut app);
 
         press(&mut app, KeyCode::Tab);
-        assert_eq!(app.color_picker.as_ref().unwrap().focus, PickerFocus::Hue);
+        assert_eq!(app.color.picker.as_ref().unwrap().focus, PickerFocus::Hue);
         press(&mut app, KeyCode::Down);
         assert_ne!(app.palette.bands[0], BarColor::CYAN);
 
         press(&mut app, KeyCode::Tab);
         assert_eq!(
-            app.color_picker.as_ref().unwrap().focus,
+            app.color.picker.as_ref().unwrap().focus,
             PickerFocus::Square
         );
     }
@@ -419,7 +429,7 @@ mod tests {
             assert_ne!(app.palette.bands[0], BarColor::CYAN);
             press(&mut app, closing);
             assert!(app.overlay == Overlay::Colors);
-            assert_eq!(app.color_picker, None);
+            assert_eq!(app.color.picker, None);
             assert_eq!(app.palette, crate::palette::Palette::default());
 
             press(&mut app, closing);
