@@ -1,5 +1,6 @@
 use crate::{
     color_picker::ColorPicker,
+    notices::{NoticeKind, Notices},
     palette::{BarColor, Palette},
 };
 
@@ -20,9 +21,6 @@ const GAIN_STEP: f32 = 0.10;
 /// Bar response with smoothing off: fast on both ways, applied on every audio frame and tick.
 const PLAIN_ATTACK_FACTOR: f32 = 0.65;
 const PLAIN_DECAY_FACTOR: f32 = 0.20;
-/// How long a bar count, sensitivity, smoothing or color notice stays on screen, in ticks (~1.5 s at
-/// 60 FPS; other frame rates scale it, see [`App::notice_ticks`]).
-const NOTICE_TICKS: u64 = 90;
 /// The frame rates the user can pick, and the one the animation constants were tuned at.
 pub const FPS_OPTIONS: [u32; 4] = [30, 60, 90, 120];
 pub const DEFAULT_FPS: u32 = 60;
@@ -57,18 +55,8 @@ pub struct App {
     chosen_bar_count: usize,
     /// Bar count actually shown: the chosen count limited by what fits the terminal.
     pub bar_count: usize,
-    /// Tick until which the bar count notice is shown.
-    bar_notice_until: u64,
-    /// Tick until which the sensitivity notice is shown.
-    gain_notice_until: u64,
-    /// Tick until which the smoothing notice is shown.
-    smoothing_notice_until: u64,
-    /// Tick until which the bar gap notice is shown.
-    gap_notice_until: u64,
-    /// Tick until which the frame rate notice is shown.
-    fps_notice_until: u64,
-    /// Tick until which the color notice is shown.
-    color_notice_until: u64,
+    /// Which notices are on screen.
+    notices: Notices,
     /// Vector containing normalized and smoothed audio bar magnitudes (0.0 to 1.0).
     pub audio_bars: Vec<f32>,
     /// Vector containing the target values most recently received from the FFT.
@@ -124,12 +112,7 @@ impl Default for App {
             terminal_width: 0,
             chosen_bar_count: MIN_BARS,
             bar_count: MIN_BARS,
-            bar_notice_until: 0,
-            gain_notice_until: 0,
-            smoothing_notice_until: 0,
-            gap_notice_until: 0,
-            fps_notice_until: 0,
-            color_notice_until: 0,
+            notices: Notices::default(),
             audio_bars: vec![0.0; MIN_BARS],
             target_bars: vec![0.0; MIN_BARS],
             gain: 1.0,
@@ -186,9 +169,12 @@ impl App {
         self.apply_response(steps);
     }
 
-    /// How many ticks a notice stays on screen, so it lasts the same time at every frame rate.
-    fn notice_ticks(&self) -> u64 {
-        NOTICE_TICKS * self.fps as u64 / DEFAULT_FPS as u64
+    fn notify(&mut self, kind: NoticeKind) {
+        self.notices.show(kind, self.tick_counter, self.fps);
+    }
+
+    fn notice_active(&self, kind: NoticeKind) -> bool {
+        self.notices.is_active(kind, self.tick_counter)
     }
 
     /// Sets should_quit to true to quit the application.
@@ -244,7 +230,8 @@ impl App {
 
     /// The bar count to announce on screen right after the user changed it.
     pub fn bar_notice(&self) -> Option<usize> {
-        (self.tick_counter < self.bar_notice_until).then_some(self.bar_count)
+        self.notice_active(NoticeKind::Bars)
+            .then_some(self.bar_count)
     }
 
     fn set_chosen_bar_count(&mut self, target: usize) {
@@ -254,7 +241,7 @@ impl App {
             self.chosen_bar_count = target;
             self.sync_bar_count();
         }
-        self.bar_notice_until = self.tick_counter + self.notice_ticks();
+        self.notify(NoticeKind::Bars);
     }
 
     /// Recomputes the shown bar count and stretches the current bars to the new length, so the
@@ -358,37 +345,39 @@ impl App {
     /// Increases visualization sensitivity/gain.
     pub fn increase_gain(&mut self) {
         self.gain = round_gain((self.gain + GAIN_STEP).min(MAX_GAIN));
-        self.gain_notice_until = self.tick_counter + self.notice_ticks();
+        self.notify(NoticeKind::Gain);
     }
 
     /// Decreases visualization sensitivity/gain.
     pub fn decrease_gain(&mut self) {
         self.gain = round_gain((self.gain - GAIN_STEP).max(MIN_GAIN));
-        self.gain_notice_until = self.tick_counter + self.notice_ticks();
+        self.notify(NoticeKind::Gain);
     }
 
     /// Turns smoothing on or off.
     pub fn toggle_smoothing(&mut self) {
         self.smoothing = !self.smoothing;
-        self.smoothing_notice_until = self.tick_counter + self.notice_ticks();
+        self.notify(NoticeKind::Smoothing);
     }
 
     /// The smoothing state to announce on screen right after the user toggled it.
     pub fn smoothing_notice(&self) -> Option<bool> {
-        (self.tick_counter < self.smoothing_notice_until).then_some(self.smoothing)
+        self.notice_active(NoticeKind::Smoothing)
+            .then_some(self.smoothing)
     }
 
     /// Turns the gap between bars on or off. Bars take fewer columns without it, so more of the
     /// chosen count can fit.
     pub fn toggle_bar_gap(&mut self) {
         self.bar_gap = !self.bar_gap;
-        self.gap_notice_until = self.tick_counter + self.notice_ticks();
+        self.notify(NoticeKind::BarGap);
         self.sync_bar_count();
     }
 
     /// The bar gap state to announce on screen right after the user toggled it.
     pub fn bar_gap_notice(&self) -> Option<bool> {
-        (self.tick_counter < self.gap_notice_until).then_some(self.bar_gap)
+        self.notice_active(NoticeKind::BarGap)
+            .then_some(self.bar_gap)
     }
 
     /// Picks the next (or previous) frame rate of [`FPS_OPTIONS`], wrapping around.
@@ -404,12 +393,12 @@ impl App {
             current + len - 1
         } % len;
         self.fps = FPS_OPTIONS[next];
-        self.fps_notice_until = self.tick_counter + self.notice_ticks();
+        self.notify(NoticeKind::Fps);
     }
 
     /// The frame rate to announce on screen right after the user changed it.
     pub fn fps_notice(&self) -> Option<u32> {
-        (self.tick_counter < self.fps_notice_until).then_some(self.fps)
+        self.notice_active(NoticeKind::Fps).then_some(self.fps)
     }
 
     /// Opens the main menu with the cursor on its first row.
@@ -467,7 +456,7 @@ impl App {
         self.restore_menu();
         self.color_picker = None;
         if self.palette != self.palette_at_open {
-            self.color_notice_until = self.tick_counter + self.notice_ticks();
+            self.notify(NoticeKind::Color);
         }
     }
 
@@ -525,12 +514,13 @@ impl App {
 
     /// The color choice to announce on screen right after the user confirmed it.
     pub fn color_notice(&self) -> Option<String> {
-        (self.tick_counter < self.color_notice_until).then(|| self.palette.describe())
+        self.notice_active(NoticeKind::Color)
+            .then(|| self.palette.describe())
     }
 
     /// The sensitivity to announce on screen right after the user changed it.
     pub fn gain_notice(&self) -> Option<f32> {
-        (self.tick_counter < self.gain_notice_until).then_some(self.gain)
+        self.notice_active(NoticeKind::Gain).then_some(self.gain)
     }
 }
 
@@ -551,6 +541,7 @@ fn resample(bars: &[f32], len: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notices::NOTICE_TICKS;
     use crate::palette::ColorMode;
 
     fn app_with_width(width: u16) -> App {
