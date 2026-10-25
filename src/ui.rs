@@ -191,10 +191,11 @@ const ACTIVE_TAG: &str = " [Active]";
 const ROW_PREFIX_WIDTH: usize = 3;
 
 /// The device popup's fixed box (as wide as the main menu with its shortcuts, tall enough for
-/// [`DEVICE_POPUP_ROWS`] rows, at the center), the rows it lists and whether they need a scrollbar.
+/// the mode row and [`DEVICE_POPUP_ROWS`] rows, at the center), the rows it lists and whether they need a scrollbar.
 fn device_popup_layout(area: Rect, names: usize) -> (Rect, usize, bool) {
-    let (popup, _) = menu_layout(area, MENU_WIDTH + SHORTCUTS_WIDTH, 0, DEVICE_POPUP_ROWS + 2);
-    let list_height = popup.height.saturating_sub(2) as usize;
+    // The borders and the mode row take three lines besides the list.
+    let (popup, _) = menu_layout(area, MENU_WIDTH + SHORTCUTS_WIDTH, 0, DEVICE_POPUP_ROWS + 3);
+    let list_height = popup.height.saturating_sub(3) as usize;
     let needs_scrollbar = names > list_height && list_height > 0 && popup.width > 2;
     (popup, list_height, needs_scrollbar)
 }
@@ -217,22 +218,9 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    let tab_style = |tab: DeviceTab| {
-        if app.devices.tab == tab {
-            Style::default().fg(Color::Black).bg(Color::Cyan).bold()
-        } else {
-            Style::default()
-        }
-    };
     let popup_block = Block::bordered()
-        .title(Line::from(vec![
-            Span::raw(" "),
-            Span::styled(" Outputs ", tab_style(DeviceTab::Outputs)),
-            Span::raw(" "),
-            Span::styled(" Apps ", tab_style(DeviceTab::Apps)),
-            Span::raw(" "),
-        ]))
-        .title_bottom(Line::from(" Tab switch  Enter select  Esc close ").centered())
+        .title(" Output Device ")
+        .title_bottom(Line::from(" ←→ mode  Enter select  Esc close ").centered())
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded)
         .style(Style::default());
@@ -249,8 +237,34 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
         app.devices.ensure_visible(list_height);
     }
 
-    let inner_area = popup_block.inner(centered_area);
+    let block_inner = popup_block.inner(centered_area);
     frame.render_widget(popup_block, centered_area);
+
+    // The mode row sits above the list, like the mode row of the color popup.
+    let mode_style = if app.devices.mode_focused {
+        Style::default().fg(Color::Cyan).bold()
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let mode_text = format!(
+        "{} {:<9}◀ {} ▶",
+        if app.devices.mode_focused { ">" } else { " " },
+        "Mode",
+        app.devices.tab.label()
+    );
+    let mode_area = Rect {
+        height: 1.min(block_inner.height),
+        ..block_inner
+    };
+    frame.render_widget(
+        Paragraph::new(Line::styled(mode_text, mode_style)),
+        mode_area,
+    );
+    let inner_area = Rect {
+        y: block_inner.y + mode_area.height,
+        height: block_inner.height - mode_area.height,
+        ..block_inner
+    };
 
     let mut lines = Vec::new();
     if names.is_empty() {
@@ -261,7 +275,7 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
         lines.push(Line::styled(message, Style::default().fg(Color::DarkGray)));
     } else {
         for (i, name) in names.iter().enumerate() {
-            let is_selected = i == selected;
+            let is_selected = !app.devices.mode_focused && i == selected;
             let is_active = active == Some(i);
 
             let prefix = if is_selected { " > " } else { "   " };
@@ -1208,8 +1222,8 @@ mod tests {
         let mut many = App::with_devices((0..20).map(|i| format!("Device {i}")).collect(), 0);
         few.open_device_popup();
         many.open_device_popup();
-        assert_eq!(popup_box(&mut few), (MENU_WIDTH + SHORTCUTS_WIDTH, 9));
-        assert_eq!(popup_box(&mut many), (MENU_WIDTH + SHORTCUTS_WIDTH, 9));
+        assert_eq!(popup_box(&mut few), (MENU_WIDTH + SHORTCUTS_WIDTH, 10));
+        assert_eq!(popup_box(&mut many), (MENU_WIDTH + SHORTCUTS_WIDTH, 10));
 
         let mut app = App::with_devices(vec![long.clone()], 0);
         app.open_device_popup();

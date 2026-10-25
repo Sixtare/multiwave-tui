@@ -218,12 +218,14 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             KeyCode::Down => {
                 app.select_next_device();
             }
-            KeyCode::Tab => {
+            // Like the color popup's mode row, the mode is changed with the arrows.
+            KeyCode::Left | KeyCode::Right if app.devices.mode_focused => {
                 app.toggle_device_tab();
                 if app.devices.tab == DeviceTab::Apps {
                     return Some(AppAction::ListApps);
                 }
             }
+            KeyCode::Enter if app.devices.mode_focused => {}
             KeyCode::Enter => {
                 // Active index is updated only after the stream starts successfully.
                 return match app.devices.tab {
@@ -552,7 +554,12 @@ mod tests {
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.devices.tab, DeviceTab::Outputs);
 
-        let action = update(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        // The cursor goes up to the mode row, where the arrows change the mode.
+        press(&mut app, KeyCode::Up);
+        assert!(app.devices.mode_focused);
+        let action = update(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!((action, app.devices.tab), (None, DeviceTab::Outputs));
+        let action = update(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         assert_eq!(action, Some(AppAction::ListApps));
         assert_eq!(app.devices.tab, DeviceTab::Apps);
 
@@ -562,6 +569,7 @@ mod tests {
 
         app.devices
             .replace_apps(vec!["Spotify".into(), "Firefox".into()], None);
+        press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Down);
         let action = update(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(action, Some(AppAction::ChangeApp(1)));
