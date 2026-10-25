@@ -1,10 +1,11 @@
 use crate::{
     bar_motion::BarMotion,
     color_session::ColorSession,
+    config::Config,
     device_menu::DeviceMenu,
     menu::MenuRow,
     notices::{NoticeKind, Notices},
-    palette::Palette,
+    palette::{MAX_FADE_LEVEL, Palette},
 };
 
 /// Fewest bars the visualizer shows, even on a terminal too narrow to fit them.
@@ -138,6 +139,38 @@ impl App {
             devices: DeviceMenu::new(devices, active_device_idx),
             ..Self::default()
         }
+    }
+
+    /// The options to save between sessions.
+    pub fn config(&self) -> Config {
+        Config {
+            bars: self.chosen_bar_count,
+            gain: self.gain,
+            smoothing_level: self.smoothing_level,
+            last_smoothing_level: self.last_smoothing_level,
+            bar_gap: self.bar_gap,
+            fps: self.fps,
+            color_mode: self.palette.mode,
+            bands: self.palette.bands,
+            fade_level: self.palette.fade_level,
+        }
+    }
+
+    /// Takes the saved options, clamping each to its valid range. Call before the terminal width
+    /// is known, since that is what limits the shown bar count.
+    pub fn apply_config(&mut self, config: &Config) {
+        self.chosen_bar_count = config.bars.clamp(MIN_BARS, MAX_BARS);
+        self.gain = round_gain(config.gain.clamp(MIN_GAIN, MAX_GAIN));
+        self.smoothing_level = config.smoothing_level.min(MAX_SMOOTHING_LEVEL);
+        self.last_smoothing_level = config.last_smoothing_level.clamp(1, MAX_SMOOTHING_LEVEL);
+        self.bar_gap = config.bar_gap;
+        if FPS_OPTIONS.contains(&config.fps) {
+            self.fps = config.fps;
+        }
+        self.palette.mode = config.color_mode;
+        self.palette.bands = config.bands;
+        self.palette.fade_level = config.fade_level.min(MAX_FADE_LEVEL);
+        self.sync_bar_count();
     }
 
     /// Executes an animation cycle on each tick (`fps` times per second).
@@ -499,6 +532,36 @@ mod tests {
         let mut app = App::default();
         app.set_terminal_width(width);
         app
+    }
+
+    #[test]
+    fn test_config_round_trips_through_the_app_and_is_clamped() {
+        let mut app = app_with_width(400);
+        app.gain = 2.0;
+        app.bar_gap = false;
+        app.fps = 120;
+        app.toggle_smoothing();
+        app.palette.mode = ColorMode::Rainbow;
+        app.set_chosen_bar_count(96);
+
+        let mut restored = App::default();
+        restored.apply_config(&app.config());
+        restored.set_terminal_width(400);
+        assert_eq!(restored.config(), app.config());
+        assert_eq!(restored.bar_count, 96);
+
+        let mut config = app.config();
+        config.bars = 9999;
+        config.gain = 99.0;
+        config.fps = 45;
+        config.fade_level = 200;
+        config.last_smoothing_level = 0;
+        restored.apply_config(&config);
+        assert_eq!(restored.config().bars, MAX_BARS);
+        assert_eq!(restored.gain, MAX_GAIN);
+        assert_eq!(restored.fps, 120);
+        assert_eq!(restored.palette.fade_level, MAX_FADE_LEVEL);
+        assert_eq!(restored.config().last_smoothing_level, 1);
     }
 
     #[test]

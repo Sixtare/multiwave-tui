@@ -19,6 +19,9 @@ pub mod capture_settings;
 /// Rows of the main menu.
 pub mod menu;
 
+/// Options saved between sessions.
+pub mod config;
+
 /// Short on-screen announcements.
 pub mod notices;
 
@@ -49,6 +52,7 @@ pub mod update;
 use app::{App, MIN_BARS};
 use capture_settings::CaptureSettings;
 use color_eyre::Result;
+use config::Config;
 use event::EventHandler;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use sound_device::{DeviceListUpdate, SoundDevice};
@@ -95,7 +99,10 @@ fn main() -> Result<()> {
 
     // Initialize application state with device names (App does NOT hold SoundDevice)
     let mut app = App::with_devices(device_names, active_idx);
+    app.apply_config(&Config::load());
     events.set_fps(app.fps);
+    settings.set_gain(app.gain);
+    settings.set_smoothing(app.smoothing_strength());
     if let Some(error) = startup_error {
         app.set_audio_error(error);
     }
@@ -111,6 +118,7 @@ fn main() -> Result<()> {
     let mut tui = Tui::new(terminal, events);
     tui.enter()?;
     app.set_terminal_width(tui.width()?);
+    settings.set_num_bars(app.bar_count);
 
     // Main application loop
     tui.draw_if_changed(&mut app)?;
@@ -168,5 +176,7 @@ fn main() -> Result<()> {
 
     // Restore the terminal upon exit
     tui.exit()?;
+    // Best effort: failing to save the options must not turn a clean exit into an error.
+    let _ = app.config().save();
     Ok(())
 }

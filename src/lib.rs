@@ -4,6 +4,7 @@ pub mod bar_motion;
 pub mod capture_settings;
 pub mod color_picker;
 pub mod color_session;
+pub mod config;
 pub mod device_menu;
 pub mod event;
 pub mod menu;
