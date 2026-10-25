@@ -1,7 +1,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
-    app::App,
+    app::{App, Overlay},
     color_picker::ColorPicker,
     event::{BatchEvent, EventBatch},
 };
@@ -162,13 +162,13 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
 }
 
 pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
-    if app.show_menu {
+    if app.overlay == Overlay::Menu {
         update_menu(app, key_event);
         return None;
     }
 
     // The color popup previews on the bars, so it only touches `App` and needs no action.
-    if app.show_color_popup {
+    if app.overlay == Overlay::Colors {
         match key_event.code {
             KeyCode::Char('c') | KeyCode::Char('C')
                 if key_event.modifiers == KeyModifiers::CONTROL =>
@@ -189,7 +189,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
     }
 
     // If the device selection popup is open, handle navigation and confirmation
-    if app.show_popup {
+    if app.overlay == Overlay::Devices {
         match key_event.code {
             KeyCode::Esc | KeyCode::Char('o') | KeyCode::Char('O') => {
                 app.close_device_popup();
@@ -330,7 +330,7 @@ mod tests {
         let mut app = App::new();
         app.set_terminal_width(200);
         press(&mut app, KeyCode::Char('c'));
-        assert!(app.show_color_popup);
+        assert!(app.overlay == Overlay::Colors);
 
         press(&mut app, KeyCode::Char('s'));
         press(&mut app, KeyCode::Char('q'));
@@ -380,16 +380,16 @@ mod tests {
         let fine = app.palette.bands[0];
         assert_ne!(fine, after_plain);
         assert!(fine.r.abs_diff(after_plain.r) < after_plain.r.abs_diff(BarColor::CYAN.r));
-        assert!(app.show_color_popup);
+        assert!(app.overlay == Overlay::Colors);
         assert!(!app.smoothing);
 
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.color_picker, None);
-        assert!(app.show_color_popup);
+        assert!(app.overlay == Overlay::Colors);
         let kept = app.palette.bands[0];
 
         press(&mut app, KeyCode::Esc);
-        assert!(!app.show_color_popup);
+        assert!(app.overlay != Overlay::Colors);
         assert_eq!(app.palette.bands[0], kept);
     }
 
@@ -418,13 +418,13 @@ mod tests {
             press(&mut app, KeyCode::Down);
             assert_ne!(app.palette.bands[0], BarColor::CYAN);
             press(&mut app, closing);
-            assert!(app.show_color_popup);
+            assert!(app.overlay == Overlay::Colors);
             assert_eq!(app.color_picker, None);
             assert_eq!(app.palette, crate::palette::Palette::default());
 
             press(&mut app, closing);
-            assert!(!app.show_color_popup);
-            assert!(!app.show_popup);
+            assert!(app.overlay != Overlay::Colors);
+            assert!(app.overlay != Overlay::Devices);
         }
     }
 
@@ -433,7 +433,7 @@ mod tests {
         let mut app = App::new();
         press(&mut app, KeyCode::Char('o'));
         press(&mut app, KeyCode::Char('c'));
-        assert!(!app.show_color_popup);
+        assert!(app.overlay != Overlay::Colors);
 
         let mut app = App::new();
         press(&mut app, KeyCode::Char('c'));
@@ -493,17 +493,17 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
         );
-        assert!(app.show_popup && !app.should_quit);
+        assert!(app.overlay == Overlay::Devices && !app.should_quit);
 
         // `s` is swallowed while the popup is open.
         update(
             &mut app,
             KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
         );
-        assert!(app.show_popup && !app.smoothing);
+        assert!(app.overlay == Overlay::Devices && !app.smoothing);
 
         update(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert!(!app.show_popup && !app.should_quit);
+        assert!(app.overlay != Overlay::Devices && !app.should_quit);
 
         update(
             &mut app,
@@ -516,7 +516,7 @@ mod tests {
     fn test_esc_opens_the_menu_and_closes_it() {
         let mut app = App::with_devices(vec!["A".into()], 0);
         press(&mut app, KeyCode::Esc);
-        assert!(app.show_menu && !app.show_popup);
+        assert!(app.overlay == Overlay::Menu && app.overlay != Overlay::Devices);
 
         // Keys of the closed screen are swallowed, `q` does not quit.
         press(&mut app, KeyCode::Char('q'));
@@ -524,7 +524,7 @@ mod tests {
         assert!(!app.should_quit);
 
         press(&mut app, KeyCode::Esc);
-        assert!(!app.show_menu);
+        assert!(app.overlay != Overlay::Menu);
     }
 
     #[test]
@@ -532,20 +532,20 @@ mod tests {
         let mut app = App::with_devices(vec!["A".into()], 0);
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Enter);
-        assert!(app.show_popup && !app.show_menu);
+        assert!(app.overlay == Overlay::Devices && app.overlay != Overlay::Menu);
         press(&mut app, KeyCode::Esc);
-        assert!(!app.show_popup && app.show_menu);
+        assert!(app.overlay != Overlay::Devices && app.overlay == Overlay::Menu);
 
         press(&mut app, KeyCode::Char('c'));
-        assert!(app.show_color_popup && !app.show_menu);
+        assert!(app.overlay == Overlay::Colors && app.overlay != Overlay::Menu);
         press(&mut app, KeyCode::Esc);
-        assert!(!app.show_color_popup && app.show_menu);
+        assert!(app.overlay != Overlay::Colors && app.overlay == Overlay::Menu);
 
         // Opened by the direct shortcut, a popup closes everything.
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('o'));
         press(&mut app, KeyCode::Char('o'));
-        assert!(!app.show_popup && !app.show_menu);
+        assert!(app.overlay != Overlay::Devices && app.overlay != Overlay::Menu);
     }
 
     #[test]
@@ -621,7 +621,7 @@ mod tests {
     #[test]
     fn test_batch_stops_at_quit() {
         let mut app = App::with_devices(vec!["A".into(), "B".into()], 0);
-        app.show_popup = true;
+        app.overlay = Overlay::Devices;
         app.selected_device_idx = 1;
 
         let outcome = apply_batch(
@@ -634,7 +634,10 @@ mod tests {
         );
 
         assert!(app.should_quit);
-        assert!(app.show_popup, "keys after the quit must not run");
+        assert!(
+            app.overlay == Overlay::Devices,
+            "keys after the quit must not run"
+        );
         assert_eq!(app.tick_counter, 0);
         assert_eq!(outcome, BatchOutcome::default());
     }
@@ -719,7 +722,7 @@ mod tests {
     fn test_popup_open_does_not_change_bar_count() {
         let mut app = App::with_devices(vec!["A".into(), "B".into()], 0);
         app.set_terminal_width(400);
-        app.show_popup = true;
+        app.overlay = Overlay::Devices;
 
         update(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         update(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
