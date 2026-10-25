@@ -33,7 +33,19 @@ pub struct DeviceMenu {
     scroll_offset: usize,
     /// Which list the popup shows.
     pub tab: DeviceTab,
+    /// Whether the cursor is on the mode row above the list instead of on a row of it.
+    pub mode_focused: bool,
     pub apps: AppList,
+}
+
+impl DeviceTab {
+    /// The name the mode row shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            DeviceTab::Outputs => "Outputs",
+            DeviceTab::Apps => "Apps",
+        }
+    }
 }
 
 impl DeviceMenu {
@@ -120,26 +132,37 @@ impl DeviceMenu {
         self.apps.active = active;
     }
 
-    /// Moves the cursor down, wrapping around.
+    /// Moves the cursor down: through the list, then to the mode row, then back to the top.
     pub fn select_next(&mut self) {
-        let (len, selected) = self.shown_len_and_selected_mut();
-        if len > 0 {
-            *selected = (*selected + 1) % len;
-        }
-    }
-
-    /// Moves the cursor up, wrapping around.
-    pub fn select_prev(&mut self) {
-        let (len, selected) = self.shown_len_and_selected_mut();
-        if len > 0 {
-            *selected = (*selected + len - 1) % len;
-        }
-    }
-
-    fn shown_len_and_selected_mut(&mut self) -> (usize, &mut usize) {
-        match self.tab {
+        let focused = self.mode_focused;
+        let (len, selected) = match self.tab {
             DeviceTab::Outputs => (self.names.len(), &mut self.selected),
             DeviceTab::Apps => (self.apps.names.len(), &mut self.apps.selected),
+        };
+        if focused {
+            *selected = 0;
+            self.mode_focused = len == 0;
+        } else if *selected + 1 >= len {
+            self.mode_focused = true;
+        } else {
+            *selected += 1;
+        }
+    }
+
+    /// Moves the cursor up: through the list, then to the mode row, then back to the bottom.
+    pub fn select_prev(&mut self) {
+        let focused = self.mode_focused;
+        let (len, selected) = match self.tab {
+            DeviceTab::Outputs => (self.names.len(), &mut self.selected),
+            DeviceTab::Apps => (self.apps.names.len(), &mut self.apps.selected),
+        };
+        if focused {
+            *selected = len.saturating_sub(1);
+            self.mode_focused = len == 0;
+        } else if *selected == 0 {
+            self.mode_focused = true;
+        } else {
+            *selected -= 1;
         }
     }
 
@@ -197,13 +220,17 @@ mod tests {
     }
 
     #[test]
-    fn test_cursor_wraps_in_both_directions() {
+    fn test_cursor_passes_through_the_mode_row_when_wrapping() {
         let mut menu = DeviceMenu::new(names(3), 0);
 
         menu.select_prev();
-        assert_eq!(menu.selected, 2);
+        assert!(menu.mode_focused);
+        menu.select_prev();
+        assert_eq!((menu.mode_focused, menu.selected), (false, 2));
         menu.select_next();
-        assert_eq!(menu.selected, 0);
+        assert!(menu.mode_focused);
+        menu.select_next();
+        assert_eq!((menu.mode_focused, menu.selected), (false, 0));
     }
 
     #[test]

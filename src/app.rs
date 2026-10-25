@@ -473,6 +473,7 @@ impl App {
     pub fn open_device_popup(&mut self) {
         self.return_to_menu = self.overlay == Overlay::Menu;
         self.devices.tab = DeviceTab::Outputs;
+        self.devices.mode_focused = false;
         self.overlay = Overlay::Devices;
     }
 
@@ -1162,13 +1163,17 @@ mod tests {
         app.devices.select_next();
         assert_eq!(app.devices.selected, 2);
 
-        // Wrap-around forward
+        // Wrapping forward goes through the mode row
         app.devices.select_next();
-        assert_eq!(app.devices.selected, 0);
+        assert!(app.devices.mode_focused);
+        app.devices.select_next();
+        assert_eq!((app.devices.mode_focused, app.devices.selected), (false, 0));
 
-        // Wrap-around backward
+        // and so does wrapping backward
         app.devices.select_prev();
-        assert_eq!(app.devices.selected, 2);
+        assert!(app.devices.mode_focused);
+        app.devices.select_prev();
+        assert_eq!((app.devices.mode_focused, app.devices.selected), (false, 2));
     }
 
     #[test]
