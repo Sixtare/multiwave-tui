@@ -3,6 +3,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::{
     app::{App, Overlay},
     color_picker::ColorPicker,
+    device_menu::DeviceTab,
     event::{BatchEvent, EventBatch},
     menu::MenuRow,
 };
@@ -12,6 +13,10 @@ use crate::{
 pub enum AppAction {
     /// Request to change the active captured audio device to the specified index.
     ChangeDevice(usize),
+    /// Request to capture only the application at this row of the popup's application list.
+    ChangeApp(usize),
+    /// Refresh the list of applications playing audio.
+    ListApps,
     /// Make the running capture produce this many bars.
     SetBarCount(usize),
     /// Make the running capture apply this manual sensitivity.
@@ -213,10 +218,26 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             KeyCode::Down => {
                 app.devices.select_next();
             }
+            KeyCode::Tab => {
+                app.devices.toggle_tab();
+                if app.devices.tab == DeviceTab::Apps {
+                    return Some(AppAction::ListApps);
+                }
+            }
             KeyCode::Enter => {
                 // Active index is updated only after the stream starts successfully.
-                app.close_device_popup();
-                return Some(AppAction::ChangeDevice(app.devices.selected));
+                return match app.devices.tab {
+                    DeviceTab::Outputs => {
+                        app.close_device_popup();
+                        Some(AppAction::ChangeDevice(app.devices.selected))
+                    }
+                    // With nothing playing there is nothing to pick; the popup stays open.
+                    DeviceTab::Apps if app.devices.apps.names.is_empty() => None,
+                    DeviceTab::Apps => {
+                        app.close_device_popup();
+                        Some(AppAction::ChangeApp(app.devices.apps.selected))
+                    }
+                };
             }
             KeyCode::Char('c') | KeyCode::Char('C')
                 if key_event.modifiers == KeyModifiers::CONTROL =>
@@ -523,6 +544,32 @@ mod tests {
             KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
         );
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_apps_tab_lists_applications_and_picks_one() {
+        let mut app = App::with_devices(vec!["A".into()], 0);
+        press(&mut app, KeyCode::Char('o'));
+        assert_eq!(app.devices.tab, DeviceTab::Outputs);
+
+        let action = update(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(action, Some(AppAction::ListApps));
+        assert_eq!(app.devices.tab, DeviceTab::Apps);
+
+        // Nothing is playing: Enter keeps the popup open.
+        let action = update(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!((action, app.overlay), (None, Overlay::Devices));
+
+        app.devices
+            .replace_apps(vec!["Spotify".into(), "Firefox".into()], None);
+        press(&mut app, KeyCode::Down);
+        let action = update(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(action, Some(AppAction::ChangeApp(1)));
+        assert_eq!(app.overlay, Overlay::None);
+
+        // The popup always opens on the outputs again.
+        press(&mut app, KeyCode::Char('o'));
+        assert_eq!(app.devices.tab, DeviceTab::Outputs);
     }
 
     #[test]

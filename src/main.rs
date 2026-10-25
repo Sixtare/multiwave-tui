@@ -49,13 +49,14 @@ pub mod sound_device;
 /// Application updater.
 pub mod update;
 
-use app::{App, MIN_BARS};
+use app::{App, MIN_BARS, Overlay};
 use capture_settings::CaptureSettings;
 use color_eyre::Result;
 use config::Config;
+use device_menu::DeviceTab;
 use event::EventHandler;
 use ratatui::{Terminal, backend::CrosstermBackend};
-use sound_device::{DeviceListUpdate, SoundDevice};
+use sound_device::{AppListUpdate, DeviceListUpdate, SoundDevice};
 use std::{io::BufWriter, sync::Arc};
 use tui::Tui;
 use update::{AppAction, apply_batch};
@@ -73,6 +74,10 @@ fn apply_device_update(app: &mut App, update: DeviceListUpdate) {
     } else if update.active_changed {
         app.clear_audio_error();
     }
+}
+
+fn refresh_apps(app: &mut App, update: AppListUpdate) {
+    app.devices.replace_apps(update.names, update.active);
 }
 
 fn main() -> Result<()> {
@@ -134,6 +139,7 @@ fn main() -> Result<()> {
                         match dev.switch_device(new_idx, audio_sender.clone()) {
                             Ok(()) => {
                                 app.devices.active = new_idx;
+                                app.devices.apps.active = None;
                                 app.clear_audio_error();
                             }
                             Err(e) => {
@@ -142,6 +148,22 @@ fn main() -> Result<()> {
                         }
                     } else {
                         app.set_audio_error("No audio output device available");
+                    }
+                }
+                AppAction::ChangeApp(row) => {
+                    if let Some(ref mut dev) = sound_device {
+                        match dev.switch_to_app(row, audio_sender.clone()) {
+                            Ok(()) => app.clear_audio_error(),
+                            Err(e) => {
+                                app.set_audio_error(format!("Failed to capture application: {e}"));
+                            }
+                        }
+                        refresh_apps(&mut app, dev.list_apps());
+                    }
+                }
+                AppAction::ListApps => {
+                    if let Some(ref mut dev) = sound_device {
+                        refresh_apps(&mut app, dev.list_apps());
                     }
                 }
                 AppAction::SetBarCount(count) => settings.set_num_bars(count),
@@ -158,6 +180,19 @@ fn main() -> Result<()> {
                     }
                 }
                 AppAction::PollDevices => {
+                    if let Some(ref mut dev) = sound_device
+                        && let Some(update) = dev.poll_captured_app(&audio_sender)
+                    {
+                        apply_device_update(&mut app, update);
+                        refresh_apps(&mut app, dev.list_apps());
+                    }
+                    if let Some(ref mut dev) = sound_device
+                        && app.overlay == Overlay::Devices
+                        && app.devices.tab == DeviceTab::Apps
+                        && let Some(update) = dev.poll_apps()
+                    {
+                        refresh_apps(&mut app, update);
+                    }
                     if let Some(ref mut dev) = sound_device
                         && let Some(update) =
                             dev.poll_device_changes(app.devices.selected, &audio_sender)

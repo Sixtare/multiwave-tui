@@ -2,7 +2,7 @@ use crate::{
     bar_motion::BarMotion,
     color_session::ColorSession,
     config::Config,
-    device_menu::DeviceMenu,
+    device_menu::{DeviceMenu, DeviceTab},
     menu::MenuRow,
     notices::{NoticeKind, Notices},
     palette::{MAX_FADE_LEVEL, Palette},
@@ -409,11 +409,7 @@ impl App {
     /// like a carousel while the device row is selected, after a short pause on its start, and
     /// shows its start otherwise.
     pub fn menu_device_text(&self, width: usize) -> String {
-        let name = self
-            .devices
-            .names
-            .get(self.devices.active)
-            .map_or("", String::as_str);
+        let name = self.devices.active_name();
         let chars: Vec<char> = name.chars().collect();
         if chars.len() <= width {
             return name.to_string();
@@ -452,6 +448,7 @@ impl App {
     /// Opens the output device popup, remembering whether the main menu was open under it.
     pub fn open_device_popup(&mut self) {
         self.return_to_menu = self.overlay == Overlay::Menu;
+        self.devices.tab = DeviceTab::Outputs;
         self.overlay = Overlay::Devices;
     }
 
