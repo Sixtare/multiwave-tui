@@ -33,6 +33,8 @@ pub struct FrameState {
     /// The active device's name as the menu shows it, which moves with the carousel.
     menu_device: String,
     devices: DeviceMenu,
+    /// The highlighted device row as the popup shows it, which moves with the carousel.
+    device_text: String,
     audio_error: Option<String>,
     /// Announcements on screen, top to bottom; none while the device popup is open.
     notices: Vec<String>,
@@ -64,6 +66,14 @@ impl FrameState {
                 String::new()
             },
             devices: app.devices.clone(),
+            device_text: if devices_open {
+                let names = app.devices.shown_names().len();
+                let (popup, _, scrollbar) = device_popup_layout(Rect::from(size), names);
+                let active = app.devices.shown_active() == Some(app.devices.shown_selected());
+                app.device_row_text(device_name_width(popup, scrollbar, active))
+            } else {
+                String::new()
+            },
             audio_error: app.audio_error.clone(),
             notices: if devices_open {
                 Vec::new()
@@ -173,6 +183,33 @@ const WAVE_CHARS: &[char] = &[' ', '▂', '▃', '▄', '▅', '▆', '▇', '�
 // Characters for the lower mirror (top-anchored / upside down)
 const INVERTED_WAVE_CHARS: &[char] = &[' ', '▔', '▀', '█'];
 
+/// Rows of devices the popup shows at once, which sets its fixed height.
+const DEVICE_POPUP_ROWS: u16 = 7;
+/// The tag after the active row's name.
+const ACTIVE_TAG: &str = " [Active]";
+/// Columns before a row's name: the cursor.
+const ROW_PREFIX_WIDTH: usize = 3;
+
+/// The device popup's fixed box (as wide as the main menu with its shortcuts, tall enough for
+/// [`DEVICE_POPUP_ROWS`] rows, at the center), the rows it lists and whether they need a scrollbar.
+fn device_popup_layout(area: Rect, names: usize) -> (Rect, usize, bool) {
+    let (popup, _) = menu_layout(area, MENU_WIDTH + SHORTCUTS_WIDTH, 0, DEVICE_POPUP_ROWS + 2);
+    let list_height = popup.height.saturating_sub(2) as usize;
+    let needs_scrollbar = names > list_height && list_height > 0 && popup.width > 2;
+    (popup, list_height, needs_scrollbar)
+}
+
+/// Columns a row's name has, given whether the row carries the `[Active]` tag.
+fn device_name_width(popup: Rect, scrollbar: bool, active: bool) -> usize {
+    let inner = popup.width.saturating_sub(2) as usize - usize::from(scrollbar);
+    let tag = if active {
+        ACTIVE_TAG.chars().count()
+    } else {
+        0
+    };
+    inner.saturating_sub(ROW_PREFIX_WIDTH + tag)
+}
+
 // Draws popup menu with available output audio devices
 fn render_popup(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -193,8 +230,9 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
             Span::styled(" Outputs ", tab_style(DeviceTab::Outputs)),
             Span::raw(" "),
             Span::styled(" Apps ", tab_style(DeviceTab::Apps)),
-            Span::raw(" Tab to switch, Enter to select, Esc/o to close "),
+            Span::raw(" "),
         ]))
+        .title_bottom(Line::from(" Tab switch  Enter select  Esc close ").centered())
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded)
         .style(Style::default());
@@ -202,21 +240,14 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
     let names = app.devices.shown_names().to_vec();
     let selected = app.devices.shown_selected();
     let active = app.devices.shown_active();
-    let items_count = names.len().max(1);
-    let desired_height = (items_count as u16 + 4).clamp(6, 18);
-    // Keep a small margin around the popup, and never exceed the terminal height.
-    let max_height = area.height.saturating_sub(2).max(3).min(area.height);
-    let popup_height = desired_height.min(max_height);
-    let centered_area = area.centered(Constraint::Percentage(70), Constraint::Length(popup_height));
+    let (centered_area, list_height, needs_scrollbar) = device_popup_layout(area, names.len());
 
     // Clears out any background in the area before rendering the popup
     frame.render_widget(Clear, centered_area);
 
-    let list_height = popup_height.saturating_sub(2) as usize;
     if list_height > 0 {
         app.devices.ensure_visible(list_height);
     }
-    let needs_scrollbar = names.len() > list_height && list_height > 0 && centered_area.width > 2;
 
     let inner_area = popup_block.inner(centered_area);
     frame.render_widget(popup_block, centered_area);
@@ -234,8 +265,15 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
             let is_active = active == Some(i);
 
             let prefix = if is_selected { " > " } else { "   " };
-            let suffix = if is_active { " [Active]" } else { "" };
-            let content = format!("{}{}{}", prefix, name, suffix);
+            let suffix = if is_active { ACTIVE_TAG } else { "" };
+            // A name longer than the box is cut, and scrolls like a carousel on the highlighted row.
+            let width = device_name_width(centered_area, needs_scrollbar, is_active);
+            let shown = if is_selected {
+                app.device_row_text(width)
+            } else {
+                name.chars().take(width).collect()
+            };
+            let content = format!("{prefix}{shown}{suffix}");
 
             let style = if is_selected {
                 Style::default().fg(Color::Black).bg(Color::Cyan).bold()
@@ -1143,6 +1181,45 @@ mod tests {
         assert_eq!(left_corner(&mut app), menu);
         // Centered: 34 columns in 100.
         assert_eq!(menu, (33, 66));
+    }
+
+    #[test]
+    fn test_device_popup_has_a_fixed_size_and_scrolls_long_names() {
+        let popup_box = |app: &mut App| {
+            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+            terminal.draw(|frame| render(app, frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let top = (0..24)
+                .find(|&y| (0..100).any(|x| buffer[(x, y)].symbol() == "╭"))
+                .unwrap();
+            let left = (0..100)
+                .find(|&x| buffer[(x, top)].symbol() == "╭")
+                .unwrap();
+            let right = (left..100)
+                .find(|&x| buffer[(x, top)].symbol() == "╮")
+                .unwrap();
+            let bottom = (top..24)
+                .find(|&y| buffer[(left, y)].symbol() == "╰")
+                .unwrap();
+            (right - left + 1, bottom - top + 1)
+        };
+        let long = "A device with a very long name that cannot fit in the box".to_string();
+        let mut few = App::with_devices(vec!["One".into()], 0);
+        let mut many = App::with_devices((0..20).map(|i| format!("Device {i}")).collect(), 0);
+        few.open_device_popup();
+        many.open_device_popup();
+        assert_eq!(popup_box(&mut few), (MENU_WIDTH + SHORTCUTS_WIDTH, 9));
+        assert_eq!(popup_box(&mut many), (MENU_WIDTH + SHORTCUTS_WIDTH, 9));
+
+        let mut app = App::with_devices(vec![long.clone()], 0);
+        app.open_device_popup();
+        let size = Size::new(100, 24);
+        let before = FrameState::capture(&app, size);
+        assert!(long.starts_with(&before.device_text));
+        for _ in 0..200 {
+            app.tick();
+        }
+        assert_ne!(before, FrameState::capture(&app, size));
     }
 
     #[test]
