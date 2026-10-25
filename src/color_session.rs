@@ -56,22 +56,20 @@ impl ColorSession {
     }
 
     /// Steps the value of the highlighted row with the arrows: the color mode to the next or
-    /// previous one on the mode row, fade on or off on the fade row, its intensity on the level
-    /// row. Other rows ignore it.
+    /// previous one on the mode row, the fade level on the fade row. Other rows ignore it.
     pub fn change_option(&mut self, palette: &mut Palette, forward: bool) {
         match self.row {
             0 => palette.change_mode(forward),
-            Palette::FADE_ROW => palette.toggle_fade(),
-            Palette::FADE_LEVEL_ROW => palette.step_fade_level(forward),
+            Palette::FADE_ROW => palette.step_fade_level(forward),
             _ => {}
         }
     }
 
     /// Acts on the highlighted row: flips the mirror checkbox, or opens the color picker for a
-    /// color row. The mode, fade and level rows are changed with the arrows instead.
+    /// color row. The mode and fade rows are changed with the arrows instead.
     pub fn activate(&mut self, palette: &mut Palette) {
         match self.row {
-            0 | Palette::FADE_ROW | Palette::FADE_LEVEL_ROW => {}
+            0 | Palette::FADE_ROW => {}
             Palette::MIRROR_ROW => palette.toggle_mirror_dimmed(),
             _ => {
                 if let Some(color) = palette.row_color(self.row) {
