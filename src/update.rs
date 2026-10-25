@@ -179,8 +179,8 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             _ if app.color_picker.is_some() => update_color_picker(app, key_event),
             KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_popup(),
             KeyCode::Enter => app.activate_color_row(),
-            KeyCode::Left => app.change_color_mode(false),
-            KeyCode::Right => app.change_color_mode(true),
+            KeyCode::Left => app.change_color_option(false),
+            KeyCode::Right => app.change_color_option(true),
             KeyCode::Up => app.select_prev_color_row(),
             KeyCode::Down => app.select_next_color_row(),
             _ => {}

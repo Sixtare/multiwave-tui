@@ -476,19 +476,22 @@ impl App {
         self.color_row = self.palette.next_row(self.color_row, false);
     }
 
-    /// Switches the color mode to the next one, or the previous one, when the mode row is
-    /// highlighted.
-    pub fn change_color_mode(&mut self, forward: bool) {
-        if self.color_row == 0 {
-            self.palette.change_mode(forward);
+    /// Steps the value of the highlighted row with the arrows: the color mode to the next or
+    /// previous one on the mode row, fade on or off on the fade row, its intensity on the level row. Other rows ignore it.
+    pub fn change_color_option(&mut self, forward: bool) {
+        match self.color_row {
+            0 => self.palette.change_mode(forward),
+            Palette::FADE_ROW => self.palette.toggle_fade(),
+            Palette::FADE_LEVEL_ROW => self.palette.step_fade_level(forward),
+            _ => {}
         }
     }
 
-    /// Acts on the highlighted row: flips the mirror checkbox, or opens the color picker for a
-    /// color row. The mode row is changed with the arrows instead.
+    /// Acts on the highlighted row: flips the mirror checkbox, or opens the color picker for a color
+    /// row. The mode, fade and level rows are changed with the arrows instead.
     pub fn activate_color_row(&mut self) {
         match self.color_row {
-            0 => {}
+            0 | Palette::FADE_ROW | Palette::FADE_LEVEL_ROW => {}
             Palette::MIRROR_ROW => self.palette.toggle_mirror_dimmed(),
             _ => {
                 if let Some(color) = self.palette.row_color(self.color_row) {
@@ -610,7 +613,7 @@ mod tests {
         assert_eq!(app.palette.mode, ColorMode::Single);
         app.open_color_popup();
         app.select_prev_color_row();
-        assert_eq!(app.color_row, 4);
+        assert_eq!(app.color_row, 6);
         app.select_next_color_row();
         assert_eq!(app.color_row, 0);
         // Single color skips the mids and treble rows.
@@ -618,16 +621,24 @@ mod tests {
         app.select_next_color_row();
         assert_eq!(app.color_row, 4);
         app.select_next_color_row();
+        assert_eq!(app.color_row, 5);
+        app.select_next_color_row();
+        assert_eq!(app.color_row, 6);
+        app.select_next_color_row();
 
         // Enter does nothing on the mode row; the arrows change the mode.
         app.activate_color_row();
         assert_eq!(app.palette.mode, ColorMode::Single);
-        app.change_color_mode(true);
+        app.change_color_option(true);
         assert_eq!(app.palette.mode, ColorMode::Gradient);
-        app.change_color_mode(false);
+        app.change_color_option(false);
         assert_eq!(app.palette.mode, ColorMode::Single);
-        app.change_color_mode(true);
+        app.change_color_option(true);
         assert_eq!(app.color_picker, None);
+        app.select_prev_color_row();
+        assert_eq!(app.color_row, 6);
+        app.select_prev_color_row();
+        assert_eq!(app.color_row, 5);
         app.select_prev_color_row();
         assert_eq!(app.color_row, 4);
         app.select_prev_color_row();
@@ -639,8 +650,41 @@ mod tests {
         let mut app = App::new();
         app.open_color_popup();
         app.select_next_color_row();
-        app.change_color_mode(true);
+        app.change_color_option(true);
         assert_eq!(app.palette.mode, ColorMode::Single);
+    }
+
+    #[test]
+    fn test_fade_row_is_switched_with_the_arrows() {
+        let mut app = App::new();
+        app.open_color_popup();
+        app.select_prev_color_row();
+        app.select_prev_color_row();
+        app.select_prev_color_row();
+        assert_eq!(app.color_row, Palette::FADE_ROW);
+        assert!(app.palette.fade);
+        // Enter does nothing; the arrows switch it between on and off.
+        app.activate_color_row();
+        assert!(app.palette.fade);
+        app.change_color_option(false);
+        assert!(!app.palette.fade);
+        app.change_color_option(true);
+        assert!(app.palette.fade);
+        assert_eq!(app.color_picker, None);
+
+        // The level row steps the intensity by a tenth, and is skipped while the fade is off.
+        app.select_next_color_row();
+        assert_eq!(app.color_row, Palette::FADE_LEVEL_ROW);
+        app.change_color_option(true);
+        assert_eq!(app.palette.fade_level, 6);
+        app.change_color_option(false);
+        app.change_color_option(false);
+        assert_eq!(app.palette.fade_level, 4);
+        app.select_prev_color_row();
+        app.change_color_option(false);
+        assert!(!app.palette.fade);
+        app.select_next_color_row();
+        assert_eq!(app.color_row, Palette::MIRROR_ROW);
     }
 
     #[test]
