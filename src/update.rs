@@ -213,13 +213,13 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
                 app.close_device_popup();
             }
             KeyCode::Up => {
-                app.devices.select_prev();
+                app.select_prev_device();
             }
             KeyCode::Down => {
-                app.devices.select_next();
+                app.select_next_device();
             }
             KeyCode::Tab => {
-                app.devices.toggle_tab();
+                app.toggle_device_tab();
                 if app.devices.tab == DeviceTab::Apps {
                     return Some(AppAction::ListApps);
                 }

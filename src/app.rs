@@ -86,6 +86,8 @@ pub struct App {
     /// Tick at which the menu cursor reached its current row, where the device name carousel
     /// restarts.
     menu_row_since: u64,
+    /// Same for the highlighted row of the device popup.
+    device_row_since: u64,
     /// Whether the open popup was opened from the main menu, which then comes back when it closes.
     return_to_menu: bool,
     /// The devices listed in the popup, with the cursor, the active one and the scroll position.
@@ -118,6 +120,7 @@ impl Default for App {
             overlay: Overlay::None,
             menu_row: MenuRow::default(),
             menu_row_since: 0,
+            device_row_since: 0,
             return_to_menu: false,
             devices: DeviceMenu::default(),
             audio_error: None,
@@ -409,23 +412,44 @@ impl App {
     /// like a carousel while the device row is selected, after a short pause on its start, and
     /// shows its start otherwise.
     pub fn menu_device_text(&self, width: usize) -> String {
-        let name = self.devices.active_name();
-        let chars: Vec<char> = name.chars().collect();
-        if chars.len() <= width {
-            return name.to_string();
-        }
-        if self.menu_row != MenuRow::Device {
-            return chars[..width].iter().collect();
-        }
-        // The name loops with a gap between its end and its next start.
-        let cycle: Vec<char> = chars.iter().copied().chain("   ".chars()).collect();
         let elapsed = self.tick_counter.saturating_sub(self.menu_row_since);
-        let hold = u64::from(self.fps);
-        let ticks_per_step = u64::from((self.fps / 8).max(1));
-        let offset = elapsed.saturating_sub(hold) / ticks_per_step % cycle.len() as u64;
-        (0..width)
-            .map(|i| cycle[(offset as usize + i) % cycle.len()])
-            .collect()
+        carousel_text(
+            self.devices.active_name(),
+            width,
+            self.menu_row == MenuRow::Device,
+            elapsed,
+            self.fps,
+        )
+    }
+
+    /// The highlighted row of the device popup cut to `width` characters. A longer name scrolls
+    /// like a carousel, after a short pause on its start.
+    pub fn device_row_text(&self, width: usize) -> String {
+        let name = self
+            .devices
+            .shown_names()
+            .get(self.devices.shown_selected())
+            .map_or("", String::as_str);
+        let elapsed = self.tick_counter.saturating_sub(self.device_row_since);
+        carousel_text(name, width, true, elapsed, self.fps)
+    }
+
+    /// Moves the device popup cursor down, restarting the carousel on the new row.
+    pub fn select_next_device(&mut self) {
+        self.devices.select_next();
+        self.device_row_since = self.tick_counter;
+    }
+
+    /// Moves the device popup cursor up, restarting the carousel on the new row.
+    pub fn select_prev_device(&mut self) {
+        self.devices.select_prev();
+        self.device_row_since = self.tick_counter;
+    }
+
+    /// Switches the device popup between outputs and applications.
+    pub fn toggle_device_tab(&mut self) {
+        self.devices.toggle_tab();
+        self.device_row_since = self.tick_counter;
     }
 
     /// Closes the main menu.
@@ -516,6 +540,27 @@ impl App {
 /// (1.2000000000000002 and the like) and the limits are reached exactly.
 fn round_gain(gain: f32) -> f32 {
     (gain * 100.0).round() / 100.0
+}
+
+/// `text` cut to `width` characters. When it is longer and `scrolling`, it loops through the
+/// window like a carousel, after a pause of one second on its start; `elapsed` is the number of
+/// ticks since the row was reached.
+fn carousel_text(text: &str, width: usize, scrolling: bool, elapsed: u64, fps: u32) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= width {
+        return text.to_string();
+    }
+    if !scrolling {
+        return chars[..width].iter().collect();
+    }
+    // The text loops with a gap between its end and its next start.
+    let cycle: Vec<char> = chars.iter().copied().chain("   ".chars()).collect();
+    let hold = u64::from(fps);
+    let ticks_per_step = u64::from((fps / 8).max(1));
+    let offset = elapsed.saturating_sub(hold) / ticks_per_step % cycle.len() as u64;
+    (0..width)
+        .map(|i| cycle[(offset as usize + i) % cycle.len()])
+        .collect()
 }
 
 /// Stretches `bars` to `len` entries by picking the nearest source bar for each new one.
