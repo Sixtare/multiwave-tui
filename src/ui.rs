@@ -283,29 +283,47 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
     }
 }
 
-/// Width of the color popup, and of the color picker box beside it: the square, a gap, the hue
-/// strip and its marker, plus the borders.
-/// Width of the main menu box.
-const MENU_WIDTH: u16 = 32;
+/// Width of the main menu box and of the color popup, which sit in the same place.
+const MENU_WIDTH: u16 = 34;
 /// Width of the box beside the main menu that lists its shortcuts.
 const SHORTCUTS_WIDTH: u16 = 13;
-const POPUP_WIDTH: u16 = 34;
+const POPUP_WIDTH: u16 = MENU_WIDTH;
+/// Width of the color picker box beside the color popup: the square, a gap, the hue strip and
+/// its marker, plus the borders.
 const PICKER_WIDTH: u16 = SQUARE_COLS as u16 + 1 + 2 + 1 + 2;
 /// Height of the color picker box: the square, a blank line and the hex line, plus the borders.
 const PICKER_HEIGHT: u16 = SQUARE_ROWS as u16 + 2 + 2;
 
 /// Draws the main menu: every option with its current value, and a second box to its right with
 /// the key that reaches each one directly, row for row.
+/// Places a menu box of `width` and `height` at the center of the screen, where every menu sits,
+/// with a second box of `side_width` on its right (the shortcuts, the color picker). The pair
+/// only moves left, by as little as it takes, when the side box would not fit on the screen.
+/// Returns the menu box and the side box, which is clipped to the room left and has width 0
+/// when `side_width` is 0.
+fn menu_layout(area: Rect, width: u16, side_width: u16, height: u16) -> (Rect, Rect) {
+    let width = width.min(area.width);
+    let menu = area.centered(
+        Constraint::Length(width),
+        Constraint::Length(height.min(area.height)),
+    );
+    let x = menu
+        .x
+        .min(area.right().saturating_sub(width + side_width))
+        .max(area.x);
+    let menu = Rect { x, ..menu };
+    let side = Rect {
+        x: menu.right(),
+        width: side_width.min(area.right().saturating_sub(menu.right())),
+        ..menu
+    };
+    (menu, side)
+}
+
 fn render_menu(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    let height = (MenuRow::ALL.len() as u16 + 2).min(area.height);
-    // The two boxes are centered together on the screen.
-    let group_width = (MENU_WIDTH + SHORTCUTS_WIDTH).min(area.width);
-    let group = area.centered(Constraint::Length(group_width), Constraint::Length(height));
-    let menu_area = Rect {
-        width: MENU_WIDTH.min(group.width),
-        ..group
-    };
+    let height = MenuRow::ALL.len() as u16 + 2;
+    let (menu_area, shortcuts_area) = menu_layout(area, MENU_WIDTH, SHORTCUTS_WIDTH, height);
     if menu_area.width < 3 || menu_area.height < 3 {
         return;
     }
@@ -357,11 +375,6 @@ fn render_menu(frame: &mut Frame, app: &App) {
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
 
-    let shortcuts_area = Rect {
-        x: menu_area.right(),
-        width: group.right().saturating_sub(menu_area.right()),
-        ..menu_area
-    };
     if shortcuts_area.width < 3 {
         return;
     }
@@ -387,17 +400,12 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     let palette = &app.palette;
     // One extra line separates the fade rows from the colors.
     let height = (Palette::ROWS as u16 + 3).min(area.height);
-    // While the picker is open the popup and the picker are centered together.
-    let group_width = if app.color.picker.is_some() && POPUP_WIDTH + PICKER_WIDTH <= area.width {
-        POPUP_WIDTH + PICKER_WIDTH
+    let picker_width = if app.color.picker.is_some() {
+        PICKER_WIDTH
     } else {
-        POPUP_WIDTH.min(area.width)
+        0
     };
-    let group = area.centered(Constraint::Length(group_width), Constraint::Length(height));
-    let popup_area = Rect {
-        width: POPUP_WIDTH.min(area.width),
-        ..group
-    };
+    let (popup_area, _) = menu_layout(area, POPUP_WIDTH, picker_width, height);
     if popup_area.width < 3 || popup_area.height < 3 {
         return;
     }
@@ -1067,7 +1075,7 @@ mod tests {
     }
 
     #[test]
-    fn test_color_picker_opens_to_the_right_of_the_popup_and_both_are_centered() {
+    fn test_color_picker_opens_to_the_right_of_the_popup_which_stays_near_the_center() {
         let mut app = App::new();
         app.open_color_popup();
         app.color.select_next(&app.palette);
@@ -1077,37 +1085,64 @@ mod tests {
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
         let buffer = terminal.backend().buffer();
 
-        // The two boxes are centered together: 34 + 26 columns in 80 start at column 10.
+        // The popup stays at the center (column 23 in 80) unless the picker would not fit beside it:
+        // 34 + 26 columns in 80 push the pair left to column 20.
         let corner_rows = |x: u16| -> (u16, u16) {
             let top = (0..24).find(|&y| buffer[(x, y)].symbol() == "╭").unwrap();
             let bottom = (0..24).find(|&y| buffer[(x, y)].symbol() == "╰").unwrap();
             (top, bottom)
         };
-        let (popup_top, popup_bottom) = corner_rows(10);
-        let (picker_top, picker_bottom) = corner_rows(44);
+        let (popup_top, popup_bottom) = corner_rows(20);
+        let (picker_top, picker_bottom) = corner_rows(54);
         // Both boxes share the same center row (give or take one for odd heights).
         assert!((popup_top + popup_bottom).abs_diff(picker_top + picker_bottom) <= 1);
         assert_eq!(picker_bottom - picker_top + 1, PICKER_HEIGHT);
 
-        let text = |y: u16| -> String { (44..70).map(|x| buffer[(x, y)].symbol()).collect() };
+        let text = |y: u16| -> String { (54..80).map(|x| buffer[(x, y)].symbol()).collect() };
         assert!(text(picker_top).contains("Color"));
         assert!(text(picker_bottom - 1).contains("#00FFFF"));
 
         // The square's top right corner is the full color: cyan, with the cursor on it.
-        let square_x = 45 + SQUARE_COLS as u16 - 1;
+        let square_x = 55 + SQUARE_COLS as u16 - 1;
         let cell = &buffer[(square_x, picker_top + 1)];
         assert_eq!(cell.symbol(), "◆");
         assert_eq!(cell.bg, Color::Rgb(0, 255, 255));
         // The hue strip starts at red and its marker sits on the cyan row.
         assert_eq!(
-            buffer[(45 + SQUARE_COLS as u16 + 1, picker_top + 1)].bg,
+            buffer[(55 + SQUARE_COLS as u16 + 1, picker_top + 1)].bg,
             Color::Rgb(255, 0, 0)
         );
         let marker_y = picker_top + 1 + 5;
         assert_eq!(
-            buffer[(45 + SQUARE_COLS as u16 + 3, marker_y)].symbol(),
+            buffer[(55 + SQUARE_COLS as u16 + 3, marker_y)].symbol(),
             "◀"
         );
+    }
+
+    #[test]
+    fn test_menu_and_color_popup_share_the_same_columns() {
+        let left_corner = |app: &mut App| {
+            let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+            terminal.draw(|frame| render(app, frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let row = (0..24)
+                .find(|&y| (0..100).any(|x| buffer[(x, y)].symbol() == "╭"))
+                .unwrap();
+            let x = (0..100)
+                .find(|&x| buffer[(x, row)].symbol() == "╭")
+                .unwrap();
+            let right = (x..100)
+                .find(|&x| buffer[(x, row)].symbol() == "╮")
+                .unwrap();
+            (x, right)
+        };
+        let mut app = App::new();
+        app.open_menu();
+        let menu = left_corner(&mut app);
+        app.open_color_popup();
+        assert_eq!(left_corner(&mut app), menu);
+        // Centered: 34 columns in 100.
+        assert_eq!(menu, (33, 66));
     }
 
     #[test]
@@ -1122,9 +1157,9 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
         let buffer = terminal.backend().buffer();
-        let top = (0..24).find(|&y| buffer[(44, y)].symbol() == "╭").unwrap();
+        let top = (0..24).find(|&y| buffer[(54, y)].symbol() == "╭").unwrap();
         // Bottom left of the square is black.
-        let cell = &buffer[(45, top + SQUARE_ROWS as u16)];
+        let cell = &buffer[(55, top + SQUARE_ROWS as u16)];
         assert_eq!(cell.symbol(), "◆");
         assert_eq!(cell.bg, Color::Rgb(0, 0, 0));
         assert_eq!(cell.fg, Color::White);
