@@ -80,8 +80,8 @@ impl FrameState {
             bar_gap: app.bar_gap,
             palette: app.palette,
             gain: app.gain,
-            color_row: app.color_row,
-            color_picker: app.color_picker.clone(),
+            color_row: app.color.row,
+            color_picker: app.color.picker.clone(),
             color_notice: app.color_notice().filter(|_| !devices_open),
         }
     }
@@ -395,7 +395,7 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     // One extra line separates the checkboxes from the colors.
     let height = (Palette::ROWS as u16 + 3).min(area.height);
     // While the picker is open the popup and the picker are centered together.
-    let group_width = if app.color_picker.is_some() && POPUP_WIDTH + PICKER_WIDTH <= area.width {
+    let group_width = if app.color.picker.is_some() && POPUP_WIDTH + PICKER_WIDTH <= area.width {
         POPUP_WIDTH + PICKER_WIDTH
     } else {
         POPUP_WIDTH.min(area.width)
@@ -423,7 +423,7 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
             let label = palette.row_label(row);
             // In single-color mode the mids and treble just follow the bass.
             let grayed_out = !palette.row_selectable(row);
-            let selected = row == app.color_row;
+            let selected = row == app.color.row;
             let text_style = if grayed_out {
                 Style::default().fg(Color::DarkGray)
             } else if row == Palette::MIRROR_ROW {
@@ -474,7 +474,7 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     lines.insert(Palette::FADE_ROW, Line::default());
     frame.render_widget(Paragraph::new(lines), inner);
 
-    if let Some(picker) = &app.color_picker {
+    if let Some(picker) = &app.color.picker {
         render_color_picker(frame, popup_area, picker);
     }
 }
@@ -1095,8 +1095,8 @@ mod tests {
     fn test_color_picker_opens_to_the_right_of_the_popup_and_both_are_centered() {
         let mut app = App::new();
         app.open_color_popup();
-        app.select_next_color_row();
-        app.activate_color_row();
+        app.color.select_next(&app.palette);
+        app.color.activate(&mut app.palette);
 
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
@@ -1139,9 +1139,10 @@ mod tests {
     fn test_color_picker_cursor_moves_with_the_keys() {
         let mut app = App::new();
         app.open_color_popup();
-        app.select_next_color_row();
-        app.activate_color_row();
-        app.edit_color_picker(|picker| picker.nudge(-100, 100, false));
+        app.color.select_next(&app.palette);
+        app.color.activate(&mut app.palette);
+        app.color
+            .edit_picker(&mut app.palette, |picker| picker.nudge(-100, 100, false));
 
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
@@ -1187,8 +1188,8 @@ mod tests {
     fn test_mirror_checkbox_and_plain_mirror_colors_are_drawn() {
         let mut app = App::new();
         app.open_color_popup();
-        app.select_prev_color_row();
-        app.activate_color_row();
+        app.color.select_prev(&app.palette);
+        app.color.activate(&mut app.palette);
         app.update_audio_bars(vec![1.0; 32]);
         for _ in 0..30 {
             app.tick();
@@ -1212,13 +1213,13 @@ mod tests {
         // Off: both the label and the checkbox are yellow. On: green.
         assert_eq!(color_of(buffer, "Mirror"), Color::Yellow);
         assert_eq!(color_of(buffer, "Darker"), Color::Yellow);
-        app.activate_color_row();
+        app.color.activate(&mut app.palette);
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
         let on = terminal.backend().buffer();
         assert_eq!(color_of(on, "Mirror"), Color::Green);
         assert_eq!(color_of(on, "Darker"), Color::Green);
-        app.activate_color_row();
+        app.color.activate(&mut app.palette);
         terminal.draw(|frame| render(&mut app, frame)).unwrap();
         // The leftmost mirror cell has the same color as the bar above the divider.
         assert_eq!(buffer[(8, 23)].fg, Color::Rgb(0, 255, 255));
@@ -1232,13 +1233,14 @@ mod tests {
         app.open_color_popup();
         let open = FrameState::capture(&app, SIZE);
         assert_ne!(before, open);
-        app.select_next_color_row();
+        app.color.select_next(&app.palette);
         let moved = FrameState::capture(&app, SIZE);
         assert_ne!(open, moved);
-        app.activate_color_row();
+        app.color.activate(&mut app.palette);
         let picking = FrameState::capture(&app, SIZE);
         assert_ne!(moved, picking);
-        app.edit_color_picker(|picker| picker.nudge(-1, 0, false));
+        app.color
+            .edit_picker(&mut app.palette, |picker| picker.nudge(-1, 0, false));
         assert_ne!(picking, FrameState::capture(&app, SIZE));
     }
 
@@ -1246,7 +1248,7 @@ mod tests {
     fn test_color_notice_is_drawn_after_confirming() {
         let mut app = App::new();
         app.open_color_popup();
-        app.change_color_option(true);
+        app.color.change_option(&mut app.palette, true);
         app.close_color_popup();
 
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();

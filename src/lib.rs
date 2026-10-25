@@ -1,6 +1,7 @@
 pub mod app;
 pub mod audio_processor;
 pub mod color_picker;
+pub mod color_session;
 pub mod event;
 pub mod notices;
 pub mod palette;
