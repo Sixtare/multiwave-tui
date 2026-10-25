@@ -12,7 +12,7 @@ use cpal::{
 use crate::audio_processor::AudioProcessor;
 use crate::capture_settings::CaptureSettings;
 use crate::event::Event;
-use crate::pulse::{self, MonitorSource, PulseCapture};
+use crate::pulse::{self, AppSource, MonitorSource, PulseCapture};
 
 const DEFAULT_DEVICE_KEY: &str = "__default_output__";
 const DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
@@ -52,6 +52,14 @@ struct DeviceResolution {
     active_changed: bool,
 }
 
+/// The applications that can be captured, as the device popup lists them.
+#[derive(Debug, PartialEq, Eq)]
+pub struct AppListUpdate {
+    pub names: Vec<String>,
+    /// Row of the application being captured, if it is in the list.
+    pub active: Option<usize>,
+}
+
 /// Changes produced after re-enumerating output devices or recovering from a lost stream.
 #[derive(Debug)]
 pub struct DeviceListUpdate {
@@ -71,6 +79,12 @@ pub struct SoundDevice {
     _capture: Option<Capture>,
     default_key: Option<String>,
     last_device_check: Instant,
+    last_app_check: Instant,
+    last_captured_check: Instant,
+    /// Applications listed by the last [`SoundDevice::list_apps`], in the order of the popup rows.
+    apps: Vec<AppSource>,
+    /// The application being captured instead of a whole output, if any.
+    captured_app: Option<AppSource>,
     /// Settings the capture callback reads on every block, so they can change without
     /// rebuilding the stream.
     settings: Arc<CaptureSettings>,
@@ -280,6 +294,10 @@ impl SoundDevice {
             _capture: None,
             default_key: list.default_key,
             last_device_check: Instant::now(),
+            last_app_check: Instant::now(),
+            last_captured_check: Instant::now(),
+            apps: Vec::new(),
+            captured_app: None,
             settings,
         })
     }
@@ -309,7 +327,7 @@ impl SoundDevice {
                 Self::start_cpal_capture(device, &device_name, settings, sender)?
             }
             Source::Pulse(monitor) => {
-                Self::start_pulse_capture(monitor, &device_name, settings, sender)?
+                Self::start_pulse_capture(monitor, None, &device_name, settings, sender)?
             }
         };
 
@@ -322,8 +340,90 @@ impl SoundDevice {
         self.name = device_name;
         self.info = device_info;
         self.active_idx = index;
+        self.captured_app = None;
 
         Ok(())
+    }
+
+    /// Lists the applications playing audio (Linux with `pactl`; empty elsewhere), remembering
+    /// them so [`SoundDevice::switch_to_app`] can take a row of this list.
+    pub fn list_apps(&mut self) -> AppListUpdate {
+        self.last_app_check = Instant::now();
+        self.apps = pulse::list_apps().unwrap_or_default();
+        // The captured application stays listed even when it is paused and has no stream.
+        AppListUpdate {
+            names: self.apps.iter().map(|app| app.label.clone()).collect(),
+            active: self.captured_app.as_ref().and_then(|captured| {
+                self.apps
+                    .iter()
+                    .position(|app| app.sink_input == captured.sink_input)
+            }),
+        }
+    }
+
+    /// The list of applications again, at most once per second, so an open popup follows apps
+    /// that start or stop playing.
+    pub fn poll_apps(&mut self) -> Option<AppListUpdate> {
+        (self.last_app_check.elapsed() >= DEVICE_CHECK_INTERVAL).then(|| self.list_apps())
+    }
+
+    /// Captures only the application at `index` of the last application list.
+    pub fn switch_to_app(&mut self, index: usize, sender: mpsc::Sender<Event>) -> Result<()> {
+        let app =
+            self.apps.get(index).cloned().ok_or_else(|| {
+                color_eyre::eyre::eyre!("Application index out of range: {index}")
+            })?;
+        let (capture, device_info) = Self::start_pulse_capture(
+            &app.monitor,
+            Some(app.sink_input),
+            &app.label,
+            Arc::clone(&self.settings),
+            sender,
+        )?;
+        self._capture = Some(capture);
+        self.name = app.label.clone();
+        self.info = device_info;
+        self.captured_app = Some(app);
+        Ok(())
+    }
+
+    /// Whether an application is being captured instead of a whole output.
+    pub fn is_capturing_app(&self) -> bool {
+        self.captured_app.is_some()
+    }
+
+    /// Goes back to the default output when the captured application has stopped playing
+    /// (checked at most once per second). `None` while it is still there or no app is captured.
+    pub fn poll_captured_app(&mut self, sender: &mpsc::Sender<Event>) -> Option<DeviceListUpdate> {
+        let captured = self.captured_app.as_ref()?;
+        if self.last_captured_check.elapsed() < DEVICE_CHECK_INTERVAL {
+            return None;
+        }
+        self.last_captured_check = Instant::now();
+        let still_playing = pulse::list_apps()
+            .map(|apps| apps.iter().any(|app| app.sink_input == captured.sink_input))
+            .unwrap_or(true);
+        if still_playing {
+            return None;
+        }
+        Some(self.fall_back_to_default_output(sender))
+    }
+
+    /// Stops capturing the application and captures the default output (row 0) again.
+    fn fall_back_to_default_output(&mut self, sender: &mpsc::Sender<Event>) -> DeviceListUpdate {
+        self.captured_app = None;
+        let message = match self.switch_device(0, sender.clone()) {
+            Ok(()) => "Application closed; switched to the default output".to_string(),
+            Err(error) => format!("Failed to switch audio device: {error}"),
+        };
+        DeviceListUpdate {
+            names: self.device_names(),
+            active_idx: self.active_idx,
+            selected_idx: self.active_idx,
+            active_changed: true,
+            changed: true,
+            message: Some(message),
+        }
     }
 
     /// Polls for default-output changes and endpoint hot-plug events.
@@ -336,7 +436,8 @@ impl SoundDevice {
         selected_idx: usize,
         sender: &mpsc::Sender<Event>,
     ) -> Option<DeviceListUpdate> {
-        if self.last_device_check.elapsed() < DEVICE_CHECK_INTERVAL {
+        // Rebuilding the output capture would drop the application capture.
+        if self.captured_app.is_some() || self.last_device_check.elapsed() < DEVICE_CHECK_INTERVAL {
             return None;
         }
         self.last_device_check = Instant::now();
@@ -357,6 +458,9 @@ impl SoundDevice {
         sender: &mpsc::Sender<Event>,
     ) -> DeviceListUpdate {
         self.last_device_check = Instant::now();
+        if self.captured_app.is_some() {
+            return self.fall_back_to_default_output(sender);
+        }
         self.refresh_devices(selected_idx, sender, true)
     }
 
@@ -520,6 +624,7 @@ impl SoundDevice {
     /// Records an output's monitor with `parec`, feeding the same processor the cpal path uses.
     fn start_pulse_capture(
         monitor: &MonitorSource,
+        sink_input: Option<u32>,
         device_name: &str,
         settings: Arc<CaptureSettings>,
         sender: mpsc::Sender<Event>,
@@ -533,6 +638,7 @@ impl SoundDevice {
         let bars_sender = sender.clone();
         let capture = PulseCapture::start(
             monitor,
+            sink_input,
             move |samples| {
                 settings.apply_to(&mut processor);
                 for bars in processor.process_interleaved_samples(samples) {

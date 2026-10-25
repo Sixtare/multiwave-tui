@@ -1,5 +1,25 @@
-//! The output devices listed in the device popup, with the cursor, the active device and the
-//! scroll position.
+//! The output devices and applications listed in the device popup, with the cursor, the active
+//! one and the scroll position of each list.
+
+/// Which list the device popup shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DeviceTab {
+    /// Whole outputs: everything that device plays.
+    #[default]
+    Outputs,
+    /// Single applications that are playing audio.
+    Apps,
+}
+
+/// The applications playing audio, listed when the Apps tab is opened and then kept fresh.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AppList {
+    pub names: Vec<String>,
+    pub selected: usize,
+    /// Row of the application being captured, if any.
+    pub active: Option<usize>,
+    scroll_offset: usize,
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DeviceMenu {
@@ -11,6 +31,9 @@ pub struct DeviceMenu {
     pub active: usize,
     /// First device row visible when the list is scrollable.
     scroll_offset: usize,
+    /// Which list the popup shows.
+    pub tab: DeviceTab,
+    pub apps: AppList,
 }
 
 impl DeviceMenu {
@@ -20,13 +43,58 @@ impl DeviceMenu {
             names,
             selected: active,
             active,
-            scroll_offset: 0,
+            ..Self::default()
         }
     }
 
-    /// First device row visible.
+    /// Switches between the outputs and the applications.
+    pub fn toggle_tab(&mut self) {
+        self.tab = match self.tab {
+            DeviceTab::Outputs => DeviceTab::Apps,
+            DeviceTab::Apps => DeviceTab::Outputs,
+        };
+    }
+
+    /// Names of the rows of the tab on show.
+    pub fn shown_names(&self) -> &[String] {
+        match self.tab {
+            DeviceTab::Outputs => &self.names,
+            DeviceTab::Apps => &self.apps.names,
+        }
+    }
+
+    /// Highlighted row of the tab on show.
+    pub fn shown_selected(&self) -> usize {
+        match self.tab {
+            DeviceTab::Outputs => self.selected,
+            DeviceTab::Apps => self.apps.selected,
+        }
+    }
+
+    /// Row of the tab on show that is being captured. While an application is captured no whole
+    /// output is.
+    pub fn shown_active(&self) -> Option<usize> {
+        match self.tab {
+            DeviceTab::Outputs => self.apps.active.is_none().then_some(self.active),
+            DeviceTab::Apps => self.apps.active,
+        }
+    }
+
+    /// Name of what is being captured: the application, or else the active output.
+    pub fn active_name(&self) -> &str {
+        self.apps
+            .active
+            .and_then(|row| self.apps.names.get(row))
+            .or_else(|| self.names.get(self.active))
+            .map_or("", String::as_str)
+    }
+
+    /// First row visible in the tab on show.
     pub fn scroll_offset(&self) -> usize {
-        self.scroll_offset
+        match self.tab {
+            DeviceTab::Outputs => self.scroll_offset,
+            DeviceTab::Apps => self.apps.scroll_offset,
+        }
     }
 
     /// Takes a refreshed list, keeping both indices inside it.
@@ -37,36 +105,68 @@ impl DeviceMenu {
         self.selected = selected.min(last);
     }
 
+    /// Takes a refreshed application list. The cursor stays on the same application when it is
+    /// still listed, and otherwise on the same row.
+    pub fn replace_apps(&mut self, names: Vec<String>, active: Option<usize>) {
+        let kept = self
+            .apps
+            .names
+            .get(self.apps.selected)
+            .and_then(|name| names.iter().position(|candidate| candidate == name));
+        self.apps.selected = kept
+            .unwrap_or(self.apps.selected)
+            .min(names.len().saturating_sub(1));
+        self.apps.names = names;
+        self.apps.active = active;
+    }
+
     /// Moves the cursor down, wrapping around.
     pub fn select_next(&mut self) {
-        if !self.names.is_empty() {
-            self.selected = (self.selected + 1) % self.names.len();
+        let (len, selected) = self.shown_len_and_selected_mut();
+        if len > 0 {
+            *selected = (*selected + 1) % len;
         }
     }
 
     /// Moves the cursor up, wrapping around.
     pub fn select_prev(&mut self) {
-        if !self.names.is_empty() {
-            self.selected = (self.selected + self.names.len() - 1) % self.names.len();
+        let (len, selected) = self.shown_len_and_selected_mut();
+        if len > 0 {
+            *selected = (*selected + len - 1) % len;
+        }
+    }
+
+    fn shown_len_and_selected_mut(&mut self) -> (usize, &mut usize) {
+        match self.tab {
+            DeviceTab::Outputs => (self.names.len(), &mut self.selected),
+            DeviceTab::Apps => (self.apps.names.len(), &mut self.apps.selected),
         }
     }
 
     /// Scrolls so the selected row stays within `visible_rows`.
     pub fn ensure_visible(&mut self, visible_rows: usize) {
-        if visible_rows == 0 || self.names.is_empty() {
+        let (len, selected, scroll_offset) = match self.tab {
+            DeviceTab::Outputs => (self.names.len(), self.selected, &mut self.scroll_offset),
+            DeviceTab::Apps => (
+                self.apps.names.len(),
+                self.apps.selected,
+                &mut self.apps.scroll_offset,
+            ),
+        };
+        if visible_rows == 0 || len == 0 {
             return;
         }
 
-        let selected = self.selected.min(self.names.len() - 1);
-        let max_offset = self.names.len().saturating_sub(visible_rows);
+        let selected = selected.min(len - 1);
+        let max_offset = len.saturating_sub(visible_rows);
 
-        if selected < self.scroll_offset {
-            self.scroll_offset = selected;
-        } else if selected >= self.scroll_offset.saturating_add(visible_rows) {
-            self.scroll_offset = selected + 1 - visible_rows;
+        if selected < *scroll_offset {
+            *scroll_offset = selected;
+        } else if selected >= scroll_offset.saturating_add(visible_rows) {
+            *scroll_offset = selected + 1 - visible_rows;
         }
 
-        self.scroll_offset = self.scroll_offset.min(max_offset);
+        *scroll_offset = (*scroll_offset).min(max_offset);
     }
 }
 
@@ -113,5 +213,36 @@ mod tests {
         menu.select_prev();
         menu.ensure_visible(4);
         assert_eq!((menu.selected, menu.scroll_offset()), (0, 0));
+    }
+
+    #[test]
+    fn test_apps_tab_has_its_own_cursor_and_active_row() {
+        let mut menu = DeviceMenu::new(names(3), 1);
+        menu.replace_apps(vec!["Spotify".into(), "Firefox".into()], None);
+        menu.toggle_tab();
+
+        menu.select_next();
+        assert_eq!((menu.shown_selected(), menu.selected), (1, 1));
+        assert_eq!(menu.shown_active(), None);
+
+        menu.replace_apps(vec!["Spotify".into(), "Firefox".into()], Some(0));
+        assert_eq!(menu.shown_active(), Some(0));
+        assert_eq!(menu.active_name(), "Spotify");
+        // No whole output is captured while an application is.
+        menu.toggle_tab();
+        assert_eq!(menu.shown_active(), None);
+    }
+
+    #[test]
+    fn test_refreshed_app_list_keeps_the_cursor_on_the_same_app() {
+        let mut menu = DeviceMenu::default();
+        menu.replace_apps(vec!["A".into(), "B".into(), "C".into()], None);
+        menu.apps.selected = 2;
+
+        menu.replace_apps(vec!["C".into(), "A".into()], None);
+        assert_eq!(menu.apps.selected, 0);
+
+        menu.replace_apps(Vec::new(), None);
+        assert_eq!(menu.apps.selected, 0);
     }
 }
