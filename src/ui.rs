@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, MENU_ROWS},
+    app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, MENU_ROWS, Overlay},
     audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
     palette::{BarColor, Palette},
@@ -26,9 +26,8 @@ pub struct FrameState {
     size: Size,
     /// Displayed bars; left empty while the popup hides the visualizer.
     bars: Vec<f32>,
-    show_menu: bool,
+    overlay: Overlay,
     menu_row: usize,
-    show_popup: bool,
     devices: Vec<String>,
     selected_device_idx: usize,
     active_device_idx: usize,
@@ -49,7 +48,6 @@ pub struct FrameState {
     palette: Palette,
     /// Manual sensitivity, which sets where the vertical gradient ends.
     gain: f32,
-    show_color_popup: bool,
     color_row: usize,
     color_picker: Option<ColorPicker>,
     /// Color announcement, while it is on screen.
@@ -59,39 +57,39 @@ pub struct FrameState {
 impl FrameState {
     /// Captures what the next frame would show for `app` on a terminal of `size`.
     pub fn capture(app: &App, size: Size) -> Self {
+        let devices_open = app.overlay == Overlay::Devices;
         Self {
             size,
-            bars: if app.show_popup {
+            bars: if devices_open {
                 Vec::new()
             } else {
                 app.audio_bars.clone()
             },
-            show_menu: app.show_menu,
+            overlay: app.overlay,
             menu_row: app.menu_row,
-            show_popup: app.show_popup,
             devices: app.devices.clone(),
             selected_device_idx: app.selected_device_idx,
             active_device_idx: app.active_device_idx,
             device_scroll_offset: app.device_scroll_offset,
             audio_error: app.audio_error.clone(),
-            bar_notice: app.bar_notice().filter(|_| !app.show_popup),
-            gain_notice: app.gain_notice().filter(|_| !app.show_popup),
-            smoothing_notice: app.smoothing_notice().filter(|_| !app.show_popup),
-            gap_notice: app.bar_gap_notice().filter(|_| !app.show_popup),
-            fps_notice: app.fps_notice().filter(|_| !app.show_popup),
+            bar_notice: app.bar_notice().filter(|_| !devices_open),
+            gain_notice: app.gain_notice().filter(|_| !devices_open),
+            smoothing_notice: app.smoothing_notice().filter(|_| !devices_open),
+            gap_notice: app.bar_gap_notice().filter(|_| !devices_open),
+            fps_notice: app.fps_notice().filter(|_| !devices_open),
             bar_gap: app.bar_gap,
             palette: app.palette,
             gain: app.gain,
-            show_color_popup: app.show_color_popup,
             color_row: app.color_row,
             color_picker: app.color_picker.clone(),
-            color_notice: app.color_notice().filter(|_| !app.show_popup),
+            color_notice: app.color_notice().filter(|_| !devices_open),
         }
     }
 }
 
 pub fn render(app: &mut App, frame: &mut Frame) {
-    match app.show_popup {
+    let devices_open = app.overlay == Overlay::Devices;
+    match devices_open {
         false => {
             draw_soundwave(
                 frame,
@@ -101,10 +99,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
                 app.gain,
                 app.bar_gap,
             );
-            if app.show_menu {
+            if app.overlay == Overlay::Menu {
                 render_menu(frame, app);
             }
-            if app.show_color_popup {
+            if app.overlay == Overlay::Colors {
                 render_color_popup(frame, app);
             }
         }
@@ -114,29 +112,29 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
     // Notices stack down the top-right corner, so changing both settings at once shows both.
     let mut notice_row = 0;
-    if let Some(count) = app.bar_notice().filter(|_| !app.show_popup) {
+    if let Some(count) = app.bar_notice().filter(|_| !devices_open) {
         render_notice(frame, notice_row, &format!(" {count} bars "));
         notice_row += 1;
     }
-    if let Some(gain) = app.gain_notice().filter(|_| !app.show_popup) {
+    if let Some(gain) = app.gain_notice().filter(|_| !devices_open) {
         render_notice(frame, notice_row, &format!(" sensitivity {gain:.2}x "));
         notice_row += 1;
     }
-    if let Some(on) = app.smoothing_notice().filter(|_| !app.show_popup) {
+    if let Some(on) = app.smoothing_notice().filter(|_| !devices_open) {
         let state = if on { "on" } else { "off" };
         render_notice(frame, notice_row, &format!(" smoothing {state} "));
         notice_row += 1;
     }
-    if let Some(on) = app.bar_gap_notice().filter(|_| !app.show_popup) {
+    if let Some(on) = app.bar_gap_notice().filter(|_| !devices_open) {
         let state = if on { "on" } else { "off" };
         render_notice(frame, notice_row, &format!(" bar gap {state} "));
         notice_row += 1;
     }
-    if let Some(fps) = app.fps_notice().filter(|_| !app.show_popup) {
+    if let Some(fps) = app.fps_notice().filter(|_| !devices_open) {
         render_notice(frame, notice_row, &format!(" {fps} fps "));
         notice_row += 1;
     }
-    if let Some(color) = app.color_notice().filter(|_| !app.show_popup) {
+    if let Some(color) = app.color_notice().filter(|_| !devices_open) {
         render_notice(frame, notice_row, &format!(" color: {color} "));
     }
 
@@ -1417,7 +1415,7 @@ mod tests {
     #[test]
     fn test_frame_state_ignores_bars_behind_popup() {
         let mut app = App::new();
-        app.show_popup = true;
+        app.overlay = Overlay::Devices;
         let before = FrameState::capture(&app, SIZE);
 
         app.update_audio_bars(vec![0.5; 32]);
