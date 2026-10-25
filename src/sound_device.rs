@@ -1,9 +1,5 @@
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
-        mpsc,
-    },
+    sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
 
@@ -13,7 +9,8 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 
-use crate::audio_processor::{AudioProcessor, MAX_BAR_COUNT};
+use crate::audio_processor::AudioProcessor;
+use crate::capture_settings::CaptureSettings;
 use crate::event::Event;
 use crate::pulse::{self, MonitorSource, PulseCapture};
 
@@ -77,22 +74,6 @@ pub struct SoundDevice {
     /// Settings the capture callback reads on every block, so they can change without
     /// rebuilding the stream.
     settings: Arc<CaptureSettings>,
-}
-
-/// What the UI can change while a capture stream keeps running.
-struct CaptureSettings {
-    /// Number of bars the callback produces.
-    bar_count: AtomicUsize,
-    /// The user's manual sensitivity, as `f32` bits.
-    manual_gain_bits: AtomicU32,
-    /// Whether the treble bars are smoothed over time.
-    smoothing: AtomicBool,
-}
-
-impl CaptureSettings {
-    fn manual_gain(&self) -> f32 {
-        f32::from_bits(self.manual_gain_bits.load(Ordering::Relaxed))
-    }
 }
 
 impl SoundDevice {
@@ -282,7 +263,7 @@ impl SoundDevice {
     }
 
     /// Initializes and detects output audio devices.
-    pub fn new(num_bars: usize) -> Result<Self> {
+    pub fn new(settings: Arc<CaptureSettings>) -> Result<Self> {
         let list = Self::enumerate_output_devices();
         let name = list
             .entries
@@ -299,31 +280,8 @@ impl SoundDevice {
             _capture: None,
             default_key: list.default_key,
             last_device_check: Instant::now(),
-            settings: Arc::new(CaptureSettings {
-                bar_count: AtomicUsize::new(num_bars.clamp(1, MAX_BAR_COUNT)),
-                manual_gain_bits: AtomicU32::new(1.0f32.to_bits()),
-                smoothing: AtomicBool::new(false),
-            }),
+            settings,
         })
-    }
-
-    /// Changes how many bars the running capture produces, effective from the next audio chunk.
-    pub fn set_num_bars(&self, num_bars: usize) {
-        self.settings
-            .bar_count
-            .store(num_bars.clamp(1, MAX_BAR_COUNT), Ordering::Relaxed);
-    }
-
-    /// Changes the manual sensitivity of the running capture, effective from the next block.
-    pub fn set_gain(&self, gain: f32) {
-        self.settings
-            .manual_gain_bits
-            .store(gain.to_bits(), Ordering::Relaxed);
-    }
-
-    /// Turns the treble smoothing of the running capture on or off, effective from the next block.
-    pub fn set_smoothing(&self, on: bool) {
-        self.settings.smoothing.store(on, Ordering::Relaxed);
     }
 
     /// Starts audio capture on the currently active device.
@@ -525,112 +483,28 @@ impl SoundDevice {
         );
 
         let channels = config.channels as usize;
-        let mut processor = AudioProcessor::new(
-            channels,
-            config.sample_rate,
-            settings.bar_count.load(Ordering::Relaxed),
-        );
-        processor.set_manual_gain(settings.manual_gain());
-        processor.set_smoothing(settings.smoothing.load(Ordering::Relaxed));
+        let processor = settings.new_processor(channels, config.sample_rate);
 
-        let error_sender = sender.clone();
+        // Each sample format needs its own monomorphized stream; only the matching arm runs, so
+        // the arguments are moved, not cloned.
+        macro_rules! stream {
+            ($sample:ty) => {
+                build_capture_stream::<$sample>(device, &config, processor, sender, settings)?
+            };
+        }
         let stream = match sample_format {
-            SampleFormat::I8 => build_capture_stream::<i8>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::I16 => build_capture_stream::<i16>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::I24 => build_capture_stream::<cpal::I24>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::I32 => build_capture_stream::<i32>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::I64 => build_capture_stream::<i64>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::U8 => build_capture_stream::<u8>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::U16 => build_capture_stream::<u16>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::U24 => build_capture_stream::<cpal::U24>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::U32 => build_capture_stream::<u32>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::U64 => build_capture_stream::<u64>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::F32 => build_capture_stream::<f32>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
-            SampleFormat::F64 => build_capture_stream::<f64>(
-                device,
-                &config,
-                processor,
-                sender,
-                error_sender,
-                settings.clone(),
-            )?,
+            SampleFormat::I8 => stream!(i8),
+            SampleFormat::I16 => stream!(i16),
+            SampleFormat::I24 => stream!(cpal::I24),
+            SampleFormat::I32 => stream!(i32),
+            SampleFormat::I64 => stream!(i64),
+            SampleFormat::U8 => stream!(u8),
+            SampleFormat::U16 => stream!(u16),
+            SampleFormat::U24 => stream!(cpal::U24),
+            SampleFormat::U32 => stream!(u32),
+            SampleFormat::U64 => stream!(u64),
+            SampleFormat::F32 => stream!(f32),
+            SampleFormat::F64 => stream!(f64),
             sample_fmt => {
                 return Err(color_eyre::eyre::eyre!(
                     "Unsupported sample format: {:?}",
@@ -654,21 +528,13 @@ impl SoundDevice {
             "Device: {}, Sample Rate: {}Hz, Channels: {}, Format: F32 (parec)",
             device_name, monitor.rate, monitor.channels
         );
-        let mut processor = AudioProcessor::new(
-            monitor.channels as usize,
-            monitor.rate,
-            settings.bar_count.load(Ordering::Relaxed),
-        );
-        processor.set_manual_gain(settings.manual_gain());
-        processor.set_smoothing(settings.smoothing.load(Ordering::Relaxed));
+        let mut processor = settings.new_processor(monitor.channels as usize, monitor.rate);
 
         let bars_sender = sender.clone();
         let capture = PulseCapture::start(
             monitor,
             move |samples| {
-                processor.set_num_bars(settings.bar_count.load(Ordering::Relaxed));
-                processor.set_manual_gain(settings.manual_gain());
-                processor.set_smoothing(settings.smoothing.load(Ordering::Relaxed));
+                settings.apply_to(&mut processor);
                 for bars in processor.process_interleaved_samples(samples) {
                     let _ = bars_sender.send(Event::AudioBars(bars));
                 }
@@ -770,7 +636,6 @@ fn build_capture_stream<T>(
     config: &StreamConfig,
     processor: AudioProcessor,
     sender: mpsc::Sender<Event>,
-    error_sender: mpsc::Sender<Event>,
     settings: Arc<CaptureSettings>,
 ) -> Result<Stream, cpal::BuildStreamError>
 where
@@ -778,14 +643,13 @@ where
     f32: FromSample<T>,
 {
     let mut processor = processor;
+    let error_sender = sender.clone();
     let mut scratch = Vec::<f32>::with_capacity(1024);
 
     device.build_input_stream(
         config,
         move |data: &[T], _: &cpal::InputCallbackInfo| {
-            processor.set_num_bars(settings.bar_count.load(Ordering::Relaxed));
-            processor.set_manual_gain(settings.manual_gain());
-            processor.set_smoothing(settings.smoothing.load(Ordering::Relaxed));
+            settings.apply_to(&mut processor);
             scratch.clear();
             scratch.extend(data.iter().map(|&sample| f32::from_sample(sample)));
 

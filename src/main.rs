@@ -7,6 +7,9 @@ pub mod audio_processor;
 /// Terminal events handler.
 pub mod event;
 
+/// Settings shared with the running capture.
+pub mod capture_settings;
+
 /// Short on-screen announcements.
 pub mod notices;
 
@@ -35,11 +38,12 @@ pub mod sound_device;
 pub mod update;
 
 use app::{App, MIN_BARS};
+use capture_settings::CaptureSettings;
 use color_eyre::Result;
 use event::EventHandler;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use sound_device::{DeviceListUpdate, SoundDevice};
-use std::io::BufWriter;
+use std::{io::BufWriter, sync::Arc};
 use tui::Tui;
 use update::{AppAction, apply_batch};
 
@@ -74,7 +78,8 @@ fn main() -> Result<()> {
     let audio_sender = events.sender();
 
     // Initialize sound device capture
-    let mut sound_device = SoundDevice::new(MIN_BARS).ok();
+    let settings = Arc::new(CaptureSettings::new(MIN_BARS));
+    let mut sound_device = SoundDevice::new(Arc::clone(&settings)).ok();
     let mut startup_error = None;
     let (device_names, active_idx) = match sound_device.as_mut() {
         Some(dev) => {
@@ -132,22 +137,10 @@ fn main() -> Result<()> {
                         app.set_audio_error("No audio output device available");
                     }
                 }
-                AppAction::SetBarCount(count) => {
-                    if let Some(ref dev) = sound_device {
-                        dev.set_num_bars(count);
-                    }
-                }
-                AppAction::SetGain(gain) => {
-                    if let Some(ref dev) = sound_device {
-                        dev.set_gain(gain);
-                    }
-                }
+                AppAction::SetBarCount(count) => settings.set_num_bars(count),
+                AppAction::SetGain(gain) => settings.set_gain(gain),
                 AppAction::SetFps(fps) => tui.events.set_fps(fps),
-                AppAction::SetSmoothing(on) => {
-                    if let Some(ref dev) = sound_device {
-                        dev.set_smoothing(on);
-                    }
-                }
+                AppAction::SetSmoothing(on) => settings.set_smoothing(on),
                 AppAction::RecoverLostDevice => {
                     if let Some(ref mut dev) = sound_device {
                         let update =
