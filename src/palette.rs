@@ -12,8 +12,7 @@ const MIRROR_BRIGHTNESS: f32 = 0.35;
 /// How much darker than its full color a bar's base gets at the highest fade level: the base
 /// keeps `1 - FADE_RANGE` of its brightness. Lower levels scale it down proportionally.
 const FADE_RANGE: f32 = 0.8;
-/// Lowest and highest fade level, in tenths.
-pub const MIN_FADE_LEVEL: u8 = 1;
+/// Highest fade level, in tenths. Level 0 is the fade off.
 pub const MAX_FADE_LEVEL: u8 = 10;
 
 /// A color the user can pick for the bars: any 24-bit RGB value.
@@ -167,11 +166,9 @@ pub struct Palette {
     /// Whether the mirror reflection is a darker tone of the bar colors. Off, it uses the same
     /// colors as the bars.
     pub mirror_dimmed: bool,
-    /// Whether the bars fade from dark at the base to their full color at the top. Off, every
-    /// cell has its full color.
-    pub fade: bool,
-    /// Intensity of the fade in tenths (`MIN_FADE_LEVEL` to `MAX_FADE_LEVEL`): the higher, the
-    /// darker the base. Kept while the fade is off.
+    /// How much the bars fade from dark at the base to their full color at the top, in tenths
+    /// (0 to `MAX_FADE_LEVEL`): the higher, the darker the base. At 0 the fade is
+    /// off and every cell has its full color.
     pub fade_level: u8,
 }
 
@@ -181,29 +178,23 @@ impl Default for Palette {
             mode: ColorMode::Single,
             bands: [BarColor::CYAN, BarColor::BLUE, BarColor::PINK],
             mirror_dimmed: true,
-            fade: true,
             fade_level: 5,
         }
     }
 }
 
 impl Palette {
-    /// Rows the picker shows: the mode row, bass, mids, treble, the fade switch and level, and the mirror checkbox.
-    pub const ROWS: usize = 7;
-    /// The row of the fade checkbox.
+    /// Rows the picker shows: the mode row, bass, mids, treble, the fade level and the mirror checkbox.
+    pub const ROWS: usize = 6;
+    /// The row of the fade level.
     pub const FADE_ROW: usize = 4;
-    /// The row of the fade intensity, grayed out while the fade is off.
-    pub const FADE_LEVEL_ROW: usize = 5;
     /// The row of the mirror checkbox.
-    pub const MIRROR_ROW: usize = 6;
+    pub const MIRROR_ROW: usize = 5;
 
     /// Whether the cursor can rest on `row`. In single-color mode the mids and treble are grayed
     /// out, and in rainbow mode all three colors are, since none of them is used.
     pub fn row_selectable(&self, row: usize) -> bool {
         if row >= Self::ROWS {
-            return false;
-        }
-        if row == Self::FADE_LEVEL_ROW && !self.fade {
             return false;
         }
         match self.mode {
@@ -256,33 +247,28 @@ impl Palette {
         };
     }
 
-    /// Turns the fade at the base of the bars on or off.
-    pub fn toggle_fade(&mut self) {
-        self.fade = !self.fade;
-    }
-
     /// Raises or lowers the fade intensity by one tenth, within its limits.
     pub fn step_fade_level(&mut self, forward: bool) {
         self.fade_level = if forward {
             (self.fade_level + 1).min(MAX_FADE_LEVEL)
         } else {
-            self.fade_level.saturating_sub(1).max(MIN_FADE_LEVEL)
+            self.fade_level.saturating_sub(1)
         };
     }
 
-    /// The fade intensity as shown, `0.1` to `1.0`.
+    /// The fade level as shown: `Off`, then `0.1` to `1.0`.
     pub fn fade_level_text(&self) -> String {
-        format!("{:.1}", self.fade_level as f32 / 10.0)
+        if self.fade_level == 0 {
+            "Off".to_string()
+        } else {
+            format!("{:.1}", self.fade_level as f32 / 10.0)
+        }
     }
 
     /// Brightness of a bar's base cell, from `0.2` at the highest level to nearly `1.0` at the
     /// lowest; `1.0` while the fade is off.
     pub fn fade_floor(&self) -> f32 {
-        if self.fade {
-            1.0 - self.fade_level as f32 / MAX_FADE_LEVEL as f32 * FADE_RANGE
-        } else {
-            1.0
-        }
+        1.0 - self.fade_level as f32 / MAX_FADE_LEVEL as f32 * FADE_RANGE
     }
 
     /// Turns the darker mirror tone on or off.
@@ -365,7 +351,6 @@ impl Palette {
             (2, _) => "Mids",
             (3, _) => "Treble",
             (Self::FADE_ROW, _) => "Fade",
-            (Self::FADE_LEVEL_ROW, _) => "Intensity",
             _ => "Mirror",
         }
     }
@@ -591,28 +576,12 @@ mod tests {
         };
         assert_eq!(
             labels(&palette),
-            [
-                "Mode",
-                "Bass",
-                "Mids",
-                "Treble",
-                "Fade",
-                "Intensity",
-                "Mirror"
-            ]
+            ["Mode", "Bass", "Mids", "Treble", "Fade", "Mirror"]
         );
         palette.mode = ColorMode::Vertical;
         assert_eq!(
             labels(&palette),
-            [
-                "Mode",
-                "Base",
-                "Middle",
-                "Top",
-                "Fade",
-                "Intensity",
-                "Mirror"
-            ]
+            ["Mode", "Base", "Middle", "Top", "Fade", "Mirror"]
         );
     }
 
@@ -636,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fade_level_steps_within_its_limits_and_is_grayed_out_while_off() {
+    fn test_fade_level_steps_within_its_limits_and_reads_off_at_zero() {
         let mut palette = Palette::default();
         assert_eq!(palette.fade_level_text(), "0.5");
         assert!((palette.fade_floor() - 0.6).abs() < 1e-6);
@@ -648,16 +617,12 @@ mod tests {
         for _ in 0..20 {
             palette.step_fade_level(false);
         }
-        assert_eq!(palette.fade_level_text(), "0.1");
-
-        assert!(palette.row_selectable(Palette::FADE_LEVEL_ROW));
-        palette.toggle_fade();
-        assert!(!palette.row_selectable(Palette::FADE_LEVEL_ROW));
+        assert_eq!(palette.fade_level_text(), "Off");
         assert_eq!(palette.fade_floor(), 1.0);
-        assert_eq!(
-            palette.next_row(Palette::FADE_ROW, true),
-            Palette::MIRROR_ROW
-        );
+        palette.step_fade_level(true);
+        assert_eq!(palette.fade_level_text(), "0.1");
+        assert!(palette.row_selectable(Palette::FADE_ROW));
+        assert!(palette.row_selectable(Palette::MIRROR_ROW));
     }
 
     #[test]
@@ -665,12 +630,11 @@ mod tests {
         let mut palette = Palette::default();
         assert_eq!(palette.next_row(3, true), 4);
         assert_eq!(palette.next_row(4, true), 5);
-        assert_eq!(palette.next_row(5, true), 6);
-        assert_eq!(palette.next_row(6, true), 0);
+        assert_eq!(palette.next_row(5, true), 0);
         palette.mode = ColorMode::Single;
         assert_eq!(palette.next_row(1, true), 4);
         assert_eq!(palette.next_row(4, false), 1);
-        assert_eq!(palette.next_row(0, false), 6);
+        assert_eq!(palette.next_row(0, false), 5);
     }
 
     #[test]

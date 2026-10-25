@@ -405,10 +405,6 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
                     vec![Span::styled(format!("[{mark}] Darker"), text_style)]
                 }
                 None if row == Palette::FADE_ROW => {
-                    let text = if palette.fade { "On" } else { "Off" };
-                    vec![Span::styled(text, text_style)]
-                }
-                None if row == Palette::FADE_LEVEL_ROW => {
                     vec![Span::styled(palette.fade_level_text(), text_style)]
                 }
                 None => vec![Span::styled(palette.mode.label(), text_style)],
@@ -418,7 +414,7 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
                 text_style,
             )];
             // The mode and fade are changed with the arrows, which the row shows around the value.
-            if matches!(row, 0 | Palette::FADE_ROW | Palette::FADE_LEVEL_ROW) {
+            if matches!(row, 0 | Palette::FADE_ROW) {
                 spans.push(Span::styled("◀ ", text_style));
                 spans.extend(value);
                 spans.push(Span::styled(" ▶", text_style));
