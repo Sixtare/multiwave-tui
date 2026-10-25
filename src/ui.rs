@@ -302,7 +302,7 @@ fn render_menu(frame: &mut Frame, app: &App) {
         MenuRow::Color => app.palette.mode.label().to_string(),
         MenuRow::Sensitivity => format!("◀ {:.2}x ▶", app.gain),
         MenuRow::Bars => format!("◀ {} ▶", app.bar_count),
-        MenuRow::Smoothing => on_off(app.smoothing),
+        MenuRow::Smoothing => format!("◀ {} ▶", app.smoothing_text()),
         MenuRow::BarGap => on_off(app.bar_gap),
         MenuRow::Fps => format!("◀ {} ▶", app.fps),
     };
@@ -1015,7 +1015,7 @@ mod tests {
         app.toggle_smoothing();
         let during = FrameState::capture(&app, SIZE);
         assert_ne!(before, during);
-        assert_eq!(during.notices, [" smoothing on "]);
+        assert_eq!(during.notices, [" smoothing 1.0 "]);
 
         for _ in 0..90 {
             app.tick();

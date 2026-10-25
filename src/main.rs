@@ -139,7 +139,7 @@ fn main() -> Result<()> {
                 AppAction::SetBarCount(count) => settings.set_num_bars(count),
                 AppAction::SetGain(gain) => settings.set_gain(gain),
                 AppAction::SetFps(fps) => tui.events.set_fps(fps),
-                AppAction::SetSmoothing(on) => settings.set_smoothing(on),
+                AppAction::SetSmoothing(strength) => settings.set_smoothing(strength),
                 AppAction::RecoverLostDevice => {
                     if let Some(ref mut dev) = sound_device {
                         let update =

@@ -263,8 +263,9 @@ pub struct AudioProcessor {
     smoothed_power: Vec<f32>,
     /// Whether `smoothed_power` holds real values yet; the first frame seeds it.
     smoothing_seeded: bool,
-    /// Whether the treble bars are smoothed over time; off by default.
-    smoothing: bool,
+    /// How strongly the treble bars are smoothed over time, 0.0 (off, the default) to 1.0. It
+    /// scales the averaging's time constant.
+    smoothing: f32,
 }
 
 impl AudioProcessor {
@@ -306,7 +307,7 @@ impl AudioProcessor {
             frames_per_second: sample_rate as f32 / FFT_SIZE as f32,
             smoothed_power: vec![0.0; num_bars],
             smoothing_seeded: false,
-            smoothing: false,
+            smoothing: 0.0,
         }
     }
 
@@ -327,12 +328,14 @@ impl AudioProcessor {
         self.smoothing_seeded = false;
     }
 
-    /// Turns the treble power smoothing on or off. Turning it on starts from the next frame.
-    pub fn set_smoothing(&mut self, on: bool) {
-        if on != self.smoothing {
-            self.smoothing = on;
+    /// Sets the strength of the treble power smoothing, 0.0 (off) to 1.0 (the full time
+    /// constant). Turning it on starts from the next frame.
+    pub fn set_smoothing(&mut self, strength: f32) {
+        let strength = strength.clamp(0.0, 1.0);
+        if (strength > 0.0) != (self.smoothing > 0.0) {
             self.smoothing_seeded = false;
         }
+        self.smoothing = strength;
     }
 
     /// Sets the user's manual sensitivity multiplier (1.0 leaves the levels unchanged).
@@ -386,7 +389,12 @@ impl AudioProcessor {
         let manual_offset = 20.0 * self.manual_gain.log10() / DB_WINDOW;
         let mut overshoot = false;
         let mut bars = Vec::with_capacity(self.num_bars);
-        let smoothing = 1.0 - (-1.0 / (self.frames_per_second * TREBLE_SMOOTHING_SECONDS)).exp();
+        let smoothing = if self.smoothing > 0.0 {
+            1.0 - (-1.0 / (self.frames_per_second * TREBLE_SMOOTHING_SECONDS * self.smoothing))
+                .exp()
+        } else {
+            1.0
+        };
 
         for (index, bar) in self.layout.bars.iter().enumerate() {
             let magnitudes = match bar.band {
@@ -406,7 +414,7 @@ impl AudioProcessor {
 
             let magnitude = match bar.band {
                 Band::Bass => magnitude,
-                Band::Treble if !self.smoothing => magnitude,
+                Band::Treble if self.smoothing == 0.0 => magnitude,
                 Band::Treble => {
                     // Averaging power keeps the mean level of noise unchanged while it evens
                     // out the frame-to-frame jitter.
@@ -934,7 +942,7 @@ mod tests {
     #[test]
     fn test_treble_bars_jitter_little_from_frame_to_frame() {
         let mut processor = processor_without_agc(128, EXTRA_SLOPE_DB_PER_OCT);
-        processor.set_smoothing(true);
+        processor.set_smoothing(1.0);
         let frames =
             processor.process_interleaved_samples(&pink_noise(SAMPLE_RATE as usize * 10, 0.05));
         let frames = &frames[20..];
@@ -950,7 +958,7 @@ mod tests {
     fn test_treble_bars_are_not_smoothed_by_default() {
         let mut plain = processor_without_agc(128, EXTRA_SLOPE_DB_PER_OCT);
         let mut smoothed = processor_without_agc(128, EXTRA_SLOPE_DB_PER_OCT);
-        smoothed.set_smoothing(true);
+        smoothed.set_smoothing(1.0);
         let samples = pink_noise(SAMPLE_RATE as usize * 10, 0.05);
 
         let plain_frames = plain.process_interleaved_samples(&samples);
@@ -962,10 +970,23 @@ mod tests {
     }
 
     #[test]
+    fn test_a_higher_smoothing_strength_jitters_less() {
+        let samples = pink_noise(SAMPLE_RATE as usize * 10, 0.05);
+        let jitter = |strength: f32| {
+            let mut processor = processor_without_agc(128, EXTRA_SLOPE_DB_PER_OCT);
+            processor.set_smoothing(strength);
+            let frames = processor.process_interleaved_samples(&samples);
+            frame_to_frame_db(&frames[20..], 56)
+        };
+        let (off, light, full) = (jitter(0.0), jitter(0.3), jitter(1.0));
+        assert!(off > light && light > full, "{off} {light} {full}");
+    }
+
+    #[test]
     fn test_treble_smoothing_keeps_the_mean_level_of_noise() {
         let samples = pink_noise(SAMPLE_RATE as usize * 6, 0.05);
         let mut processor = processor_without_agc(64, 0.0);
-        processor.set_smoothing(true);
+        processor.set_smoothing(1.0);
         let levels = mean_levels_db(&mut processor, &samples);
 
         let spread = spread(&levels);
@@ -975,7 +996,7 @@ mod tests {
     #[test]
     fn test_treble_tone_onset_still_shows_within_a_few_frames() {
         let mut processor = processor_without_agc(64, EXTRA_SLOPE_DB_PER_OCT);
-        processor.set_smoothing(true);
+        processor.set_smoothing(1.0);
         processor.process_interleaved_samples(&vec![0.0; FFT_SIZE * 10]);
 
         let frames = processor.process_interleaved_samples(&sine(5000.0, 0.3, FFT_SIZE * 8));

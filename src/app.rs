@@ -24,6 +24,8 @@ const GAIN_STEP: f32 = 0.10;
 /// Bar response with smoothing off: fast on both ways, applied on every audio frame and tick.
 const PLAIN_ATTACK_FACTOR: f32 = 0.65;
 const PLAIN_DECAY_FACTOR: f32 = 0.20;
+/// Highest smoothing level, in tenths (1.0); level 0 is smoothing off.
+pub const MAX_SMOOTHING_LEVEL: u8 = 10;
 /// The frame rates the user can pick, and the one the animation constants were tuned at.
 pub const FPS_OPTIONS: [u32; 4] = [30, 60, 90, 120];
 pub const DEFAULT_FPS: u32 = 60;
@@ -61,17 +63,18 @@ pub struct App {
     /// Manual sensitivity multiplier, applied by the audio processor on top of its automatic
     /// sensitivity.
     pub gain: f32,
-    /// Whether smoothing is on: slower, per-tick bar motion plus the audio processor's treble
-    /// power averaging. Off by default.
-    pub smoothing: bool,
+    /// Smoothing level in tenths (0 to [`MAX_SMOOTHING_LEVEL`]): slower, per-tick bar motion plus
+    /// the audio processor's treble power averaging, both stronger the higher the level. 0 is
+    /// off, the default.
+    pub smoothing_level: u8,
     /// Whether a blank column separates neighbouring bars. On by default; off packs the bars
     /// against each other.
     pub bar_gap: bool,
     /// Frames (ticks) per second, one of [`FPS_OPTIONS`].
     pub fps: u32,
-    /// Attack factor with smoothing on: fast and damped rising response.
+    /// Attack factor at full smoothing: fast and damped rising response.
     pub attack_factor: f32,
-    /// Decay factor with smoothing on: gradual and fluid falling response.
+    /// Decay factor at full smoothing: gradual and fluid falling response.
     pub decay_factor: f32,
     /// The overlay that is open, if any.
     pub overlay: Overlay,
@@ -100,7 +103,7 @@ impl Default for App {
             notices: Notices::default(),
             motion: BarMotion::new(MIN_BARS),
             gain: 1.0,
-            smoothing: false,
+            smoothing_level: 0,
             bar_gap: true,
             fps: DEFAULT_FPS,
             attack_factor: 0.40,
@@ -234,7 +237,7 @@ impl App {
             return;
         }
         // With smoothing on the bars only move on ticks, so the motion stays continuous.
-        if !self.smoothing {
+        if self.smoothing_level == 0 {
             self.apply_smoothing();
         }
     }
@@ -251,8 +254,14 @@ impl App {
 
     /// Moves the bars towards their targets as `steps` 60 FPS ticks would (1.0 for one).
     fn apply_response(&mut self, steps: f32) {
-        let (attack, decay) = if self.smoothing {
-            (self.attack_factor, self.decay_factor)
+        let (attack, decay) = if self.smoothing_level > 0 {
+            // From no smoothing (the bars jump to their targets) at level 0.0 to the full
+            // factors at 1.0.
+            let strength = self.smoothing_strength();
+            (
+                1.0 + (self.attack_factor - 1.0) * strength,
+                1.0 + (self.decay_factor - 1.0) * strength,
+            )
         } else {
             (PLAIN_ATTACK_FACTOR, PLAIN_DECAY_FACTOR)
         };
@@ -271,16 +280,44 @@ impl App {
         self.notify(NoticeKind::Gain);
     }
 
-    /// Turns smoothing on or off.
+    /// The smoothing level as a strength, 0.0 (off) to 1.0.
+    pub fn smoothing_strength(&self) -> f32 {
+        self.smoothing_level as f32 / MAX_SMOOTHING_LEVEL as f32
+    }
+
+    /// The smoothing level as shown: `off`, then `0.1` to `1.0`.
+    pub fn smoothing_text(&self) -> String {
+        if self.smoothing_level == 0 {
+            "off".to_string()
+        } else {
+            format!("{:.1}", self.smoothing_strength())
+        }
+    }
+
+    /// Switches smoothing off, or to its full level when it is off.
     pub fn toggle_smoothing(&mut self) {
-        self.smoothing = !self.smoothing;
+        self.smoothing_level = if self.smoothing_level == 0 {
+            MAX_SMOOTHING_LEVEL
+        } else {
+            0
+        };
         self.notify(NoticeKind::Smoothing);
     }
 
-    /// The smoothing state to announce on screen right after the user toggled it.
-    pub fn smoothing_notice(&self) -> Option<bool> {
+    /// Raises or lowers the smoothing by one tenth, within its limits.
+    pub fn step_smoothing(&mut self, forward: bool) {
+        self.smoothing_level = if forward {
+            (self.smoothing_level + 1).min(MAX_SMOOTHING_LEVEL)
+        } else {
+            self.smoothing_level.saturating_sub(1)
+        };
+        self.notify(NoticeKind::Smoothing);
+    }
+
+    /// The smoothing level to announce on screen right after the user changed it.
+    pub fn smoothing_notice(&self) -> Option<String> {
         self.notice_active(NoticeKind::Smoothing)
-            .then_some(self.smoothing)
+            .then(|| self.smoothing_text())
     }
 
     /// Turns the gap between bars on or off. Bars take fewer columns without it, so more of the
@@ -382,7 +419,7 @@ impl App {
             self.gain_notice()
                 .map(|gain| format!(" sensitivity {gain:.2}x ")),
             self.smoothing_notice()
-                .map(|on| format!(" smoothing {} ", on_off(on))),
+                .map(|level| format!(" smoothing {level} ")),
             self.bar_gap_notice()
                 .map(|on| format!(" bar gap {} ", on_off(on))),
             self.fps_notice().map(|fps| format!(" {fps} fps ")),
@@ -735,7 +772,7 @@ mod tests {
     #[test]
     fn test_smoothing_is_off_by_default_and_bars_react_to_each_audio_frame() {
         let mut app = App::default();
-        assert!(!app.smoothing);
+        assert_eq!(app.smoothing_level, 0);
 
         app.update_audio_bars(vec![1.0; 32]);
 
@@ -749,7 +786,7 @@ mod tests {
         assert_eq!(app.smoothing_notice(), None);
 
         app.toggle_smoothing();
-        assert_eq!(app.smoothing_notice(), Some(true));
+        assert_eq!(app.smoothing_notice().as_deref(), Some("1.0"));
 
         for _ in 0..NOTICE_TICKS {
             app.tick();
@@ -757,13 +794,47 @@ mod tests {
         assert_eq!(app.smoothing_notice(), None);
 
         app.toggle_smoothing();
-        assert_eq!(app.smoothing_notice(), Some(false));
+        assert_eq!(app.smoothing_notice().as_deref(), Some("off"));
+    }
+
+    #[test]
+    fn test_smoothing_steps_by_a_tenth_between_off_and_one() {
+        let mut app = App::default();
+        assert_eq!(app.smoothing_text(), "off");
+        app.step_smoothing(false);
+        assert_eq!(app.smoothing_level, 0);
+        app.step_smoothing(true);
+        assert_eq!(app.smoothing_text(), "0.1");
+        for _ in 0..20 {
+            app.step_smoothing(true);
+        }
+        assert_eq!(app.smoothing_text(), "1.0");
+        assert_eq!(app.smoothing_notice().as_deref(), Some("1.0"));
+        for _ in 0..10 {
+            app.step_smoothing(false);
+        }
+        assert_eq!(app.smoothing_text(), "off");
+    }
+
+    #[test]
+    fn test_a_higher_smoothing_level_moves_the_bars_less_per_tick() {
+        let rise = |level: u8| {
+            let mut app = App {
+                smoothing_level: level,
+                ..App::default()
+            };
+            app.update_audio_bars(vec![1.0; 32]);
+            app.tick();
+            app.motion.bars()[0]
+        };
+        assert!(rise(2) > rise(5));
+        assert!(rise(5) > rise(10));
     }
 
     #[test]
     fn test_bars_move_a_little_on_every_tick() {
         let mut app = App {
-            smoothing: true,
+            smoothing_level: MAX_SMOOTHING_LEVEL,
             ..App::default()
         };
         app.update_audio_bars(vec![1.0; 32]);
@@ -779,14 +850,14 @@ mod tests {
     #[test]
     fn test_a_bar_falls_slower_than_it_rises() {
         let mut up = App {
-            smoothing: true,
+            smoothing_level: MAX_SMOOTHING_LEVEL,
             ..App::default()
         };
         up.update_audio_bars(vec![1.0; 32]);
         up.tick();
 
         let mut down = App {
-            smoothing: true,
+            smoothing_level: MAX_SMOOTHING_LEVEL,
             motion: BarMotion::from_parts(vec![1.0; 32], vec![0.0; 32]),
             ..App::default()
         };
@@ -799,12 +870,12 @@ mod tests {
     #[test]
     fn test_a_brief_dip_barely_moves_the_bar() {
         let mut steady = App {
-            smoothing: true,
+            smoothing_level: MAX_SMOOTHING_LEVEL,
             motion: BarMotion::from_parts(vec![0.8; 32], vec![0.0; 32]),
             ..App::default()
         };
         let mut dipping = App {
-            smoothing: true,
+            smoothing_level: MAX_SMOOTHING_LEVEL,
             motion: BarMotion::from_parts(vec![0.8; 32], vec![0.0; 32]),
             ..App::default()
         };
