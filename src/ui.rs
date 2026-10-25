@@ -196,7 +196,7 @@ fn render_audio_error(frame: &mut Frame, message: &str) {
 }
 
 /// How much the reflection is attenuated, for a more realistic mirror/water effect.
-const MIRROR_ATTENUATION: f32 = 0.85;
+const MIRROR_ATTENUATION: f32 = 0.6;
 
 // Characters for the upper bars (base-anchored)
 const WAVE_CHARS: &[char] = &[' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -394,7 +394,7 @@ fn render_menu(frame: &mut Frame, app: &App) {
 fn render_color_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let palette = &app.palette;
-    // One extra line separates the mirror checkbox from the colors.
+    // One extra line separates the checkboxes from the colors.
     let height = (Palette::ROWS as u16 + 3).min(area.height);
     // While the picker is open the popup and the picker are centered together.
     let group_width = if app.color_picker.is_some() && POPUP_WIDTH + PICKER_WIDTH <= area.width {
@@ -429,8 +429,8 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
             let text_style = if grayed_out {
                 Style::default().fg(Color::DarkGray)
             } else if row == Palette::MIRROR_ROW {
-                // The checkbox row shows its state: green when on, yellow when off. The cursor
-                // is shown by the `>` and bold text.
+                // The checkbox shows its state: green when on, yellow when off. The cursor is
+                // shown by the `>` and bold text. The fade row keeps the default text colors.
                 let state = if palette.mirror_dimmed {
                     Color::Green
                 } else {
@@ -449,14 +449,21 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
                     let mark = if palette.mirror_dimmed { "x" } else { " " };
                     vec![Span::styled(format!("[{mark}] Darker"), text_style)]
                 }
+                None if row == Palette::FADE_ROW => {
+                    let text = if palette.fade { "On" } else { "Off" };
+                    vec![Span::styled(text, text_style)]
+                }
+                None if row == Palette::FADE_LEVEL_ROW => {
+                    vec![Span::styled(palette.fade_level_text(), text_style)]
+                }
                 None => vec![Span::styled(palette.mode.label(), text_style)],
             };
             let mut spans = vec![Span::styled(
-                format!("{} {:<7}", if selected { ">" } else { " " }, label),
+                format!("{} {:<9}", if selected { ">" } else { " " }, label),
                 text_style,
             )];
-            // The mode is changed with the arrows, which the row shows around its name.
-            if row == 0 {
+            // The mode and fade are changed with the arrows, which the row shows around the value.
+            if matches!(row, 0 | Palette::FADE_ROW | Palette::FADE_LEVEL_ROW) {
                 spans.push(Span::styled("◀ ", text_style));
                 spans.extend(value);
                 spans.push(Span::styled(" ▶", text_style));
@@ -466,7 +473,7 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
             Line::from(spans)
         })
         .collect();
-    lines.insert(Palette::MIRROR_ROW, Line::default());
+    lines.insert(Palette::FADE_ROW, Line::default());
     frame.render_widget(Paragraph::new(lines), inner);
 
     if let Some(picker) = &app.color_picker {
@@ -593,6 +600,22 @@ fn color_value(color: BarColor, name_style: Style) -> Vec<Span<'static>> {
     ]
 }
 
+/// Brightness (`floor` to 1.0) of a cell `t` (0 to 1) of the way up its bar.
+fn base_fade(t: f32, floor: f32) -> f32 {
+    floor + (1.0 - floor) * t.clamp(0.0, 1.0)
+}
+
+/// Scales an RGB color's brightness by `factor`; other colors are returned as they are.
+fn fade(color: Color, factor: f32) -> Color {
+    match color {
+        Color::Rgb(r, g, b) => {
+            let scale = |channel: u8| (channel as f32 * factor).round() as u8;
+            Color::Rgb(scale(r), scale(g), scale(b))
+        }
+        other => other,
+    }
+}
+
 /// Picks the glyph for one bar cell, given the row's threshold and the glyph ramp to use.
 fn bar_glyph(amplitude: f32, threshold: f32, rows: usize, glyphs: &[char]) -> char {
     let row_span = 1.0 / rows as f32;
@@ -667,29 +690,51 @@ impl Widget for Soundwave<'_> {
             let last_row = (rows as f32 * full_height - 1.0).max(1.0);
             (row as f32 / last_row).min(1.0)
         };
+        let upper_height = self.peak_height;
+        let mirror_height = self.peak_height * MIRROR_ATTENUATION;
         let (upper_row_colors, mirror_row_colors): (Vec<Color>, Vec<Color>) =
             if self.palette.is_vertical() {
                 (
                     (0..upper_rows)
                         .map(|row| {
-                            self.palette
-                                .height_color(height_t(row, upper_rows, self.peak_height))
-                                .color()
+                            let t = height_t(row, upper_rows, upper_height);
+                            fade(
+                                self.palette.height_color(t).color(),
+                                base_fade(t, self.palette.fade_floor()),
+                            )
                         })
                         .collect(),
                     (0..mirror_rows)
                         .map(|row| {
-                            self.palette.mirror_height_color(height_t(
-                                row,
-                                mirror_rows,
-                                self.peak_height * MIRROR_ATTENUATION,
-                            ))
+                            let t = height_t(row, mirror_rows, mirror_height);
+                            fade(
+                                self.palette.mirror_height_color(t),
+                                base_fade(t, self.palette.fade_floor()),
+                            )
                         })
                         .collect(),
                 )
             } else {
                 (Vec::new(), Vec::new())
             };
+        // Every cell fades from dark at the base to its full color at the top of a loud bar, for
+        // a softer look. The reflection fades the same way, away from the divider.
+        let upper_fades: Vec<f32> = (0..upper_rows)
+            .map(|row| {
+                base_fade(
+                    height_t(row, upper_rows, upper_height),
+                    self.palette.fade_floor(),
+                )
+            })
+            .collect();
+        let mirror_fades: Vec<f32> = (0..mirror_rows)
+            .map(|row| {
+                base_fade(
+                    height_t(row, mirror_rows, mirror_height),
+                    self.palette.fade_floor(),
+                )
+            })
+            .collect();
 
         for (i, &amplitude) in self.bars.iter().enumerate() {
             let column = i * columns_per_bar;
@@ -701,11 +746,14 @@ impl Widget for Soundwave<'_> {
             let mirror_amplitude = (amplitude * MIRROR_ATTENUATION).clamp(0.0, 1.0);
 
             // 1. Upper Visualizer (grows upward from the center line to the top of the screen)
-            for row in 0..upper_rows {
+            for (row, &row_fade) in upper_fades.iter().enumerate() {
                 let threshold = row as f32 / upper_rows as f32;
                 let glyph = bar_glyph(normalized, threshold, upper_rows, WAVE_CHARS);
                 let y = divider_y - 1 - row as u16;
-                let color = upper_row_colors.get(row).copied().unwrap_or(color);
+                let color = upper_row_colors
+                    .get(row)
+                    .copied()
+                    .unwrap_or_else(|| fade(color, row_fade));
                 set_cell(column, y, glyph, color);
                 if self.gap {
                     set_cell(column + 1, y, ' ', color);
@@ -719,7 +767,7 @@ impl Widget for Soundwave<'_> {
             }
 
             // 3. Mirror Effect (upside down, grows down towards screen bottom)
-            for row in 0..mirror_rows {
+            for (row, &row_fade) in mirror_fades.iter().enumerate() {
                 let threshold = row as f32 / mirror_rows as f32;
                 let glyph = bar_glyph(
                     mirror_amplitude,
@@ -728,7 +776,10 @@ impl Widget for Soundwave<'_> {
                     INVERTED_WAVE_CHARS,
                 );
                 let y = divider_y + 1 + row as u16;
-                let mirror_color = mirror_row_colors.get(row).copied().unwrap_or(mirror_color);
+                let mirror_color = mirror_row_colors
+                    .get(row)
+                    .copied()
+                    .unwrap_or_else(|| fade(mirror_color, row_fade));
                 set_cell(column, y, glyph, mirror_color);
                 if self.gap {
                     set_cell(column + 1, y, ' ', mirror_color);
@@ -839,10 +890,12 @@ mod tests {
         assert_eq!(buffer[(8, 3)].symbol(), "─");
         assert_eq!(buffer[(71, 3)].symbol(), "─");
         assert_eq!(buffer[(72, 3)].symbol(), " ");
-        // The mirror is attenuated to 0.85, so its last row is partially filled.
+        // The mirror is attenuated to 0.6, so its last row is partially filled.
         assert_eq!(buffer[(8, 4)].symbol(), "█");
-        assert_eq!(buffer[(8, 4)].fg, Color::Rgb(0, 128, 128));
-        assert_eq!(buffer[(8, 6)].symbol(), "▀");
+        // Next to the divider the reflection is at its dimmest (base fade of the dimmed color).
+        assert_eq!(buffer[(8, 4)].fg, Color::Rgb(0, 53, 53));
+        assert_ne!(buffer[(8, 5)].symbol(), " ");
+        assert_eq!(buffer[(8, 6)].symbol(), " ");
     }
 
     #[test]
@@ -1059,8 +1112,8 @@ mod tests {
         };
         let (popup_top, popup_bottom) = corner_rows(10);
         let (picker_top, picker_bottom) = corner_rows(44);
-        // Both boxes share the same center row.
-        assert_eq!(popup_top + popup_bottom, picker_top + picker_bottom);
+        // Both boxes share the same center row (give or take one for odd heights).
+        assert!((popup_top + popup_bottom).abs_diff(picker_top + picker_bottom) <= 1);
         assert_eq!(picker_bottom - picker_top + 1, PICKER_HEIGHT);
 
         let text = |y: u16| -> String { (44..70).map(|x| buffer[(x, y)].symbol()).collect() };
@@ -1123,7 +1176,7 @@ mod tests {
 
         // Rows after the border: mode, bass, mids, treble. Mids and treble are dark gray text
         // with the bass color's swatch; the bass row is not grayed out.
-        let swatch_x = 23 + 1 + 2 + 7;
+        let swatch_x = 23 + 1 + 2 + 9;
         let label = |y: u16| buffer[(25, y)].fg;
         assert_eq!(label(top + 2), Color::White);
         assert_eq!(label(top + 3), Color::DarkGray);
@@ -1195,7 +1248,7 @@ mod tests {
     fn test_color_notice_is_drawn_after_confirming() {
         let mut app = App::new();
         app.open_color_popup();
-        app.change_color_mode(true);
+        app.change_color_option(true);
         app.close_color_popup();
 
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
@@ -1223,7 +1276,7 @@ mod tests {
         let colors: Vec<Color> = (0..32).map(|bar| buffer[(bar * 2, 0)].fg).collect();
         assert!(colors.windows(2).all(|pair| pair[0] != pair[1]));
         // The mirror is the same blend, darker.
-        assert_eq!(buffer[(0, 4)].fg, Color::Rgb(0, 128, 128));
+        assert_eq!(buffer[(0, 4)].fg, Color::Rgb(0, 53, 53));
         assert_ne!(buffer[(20, 4)].fg, buffer[(22, 4)].fg);
     }
 
@@ -1249,7 +1302,8 @@ mod tests {
         let upper = column(0, 0..5);
         assert_eq!(upper[0], Color::Rgb(0, 0, 255));
         assert_eq!(upper[1], Color::Rgb(0, 0, 255));
-        assert_eq!(upper[4], Color::Rgb(255, 0, 0));
+        // The base is faded to the palette's fade floor (0.6 at the default level).
+        assert_eq!(upper[4], Color::Rgb(153, 0, 0));
         // The rows in between are real blends.
         assert_ne!(upper[2], upper[1]);
         assert_ne!(upper[2], upper[3]);
@@ -1259,9 +1313,9 @@ mod tests {
         // The mirror repeats the blend going down, darker, and ends sooner since it is
         // attenuated.
         let mirror = column(0, 6..11);
-        assert_eq!(mirror[0], Color::Rgb(128, 0, 0));
-        assert_eq!(mirror[3], Color::Rgb(0, 0, 128));
-        assert_eq!(mirror[4], Color::Rgb(0, 0, 128));
+        assert_eq!(mirror[0], Color::Rgb(53, 0, 0));
+        assert_eq!(mirror[3], Color::Rgb(0, 0, 89));
+        assert_eq!(mirror[4], Color::Rgb(0, 0, 89));
     }
 
     #[test]
