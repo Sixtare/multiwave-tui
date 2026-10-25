@@ -65,12 +65,11 @@ impl ColorSession {
         }
     }
 
-    /// Acts on the highlighted row: flips the mirror checkbox, or opens the color picker for a
-    /// color row. The mode and fade rows are changed with the arrows instead.
+    /// Acts on the highlighted row: opens the color picker for a color row. The mode and fade
+    /// rows are changed with the arrows instead.
     pub fn activate(&mut self, palette: &mut Palette) {
         match self.row {
             0 | Palette::FADE_ROW => {}
-            Palette::MIRROR_ROW => palette.toggle_mirror_dimmed(),
             _ => {
                 if let Some(color) = palette.row_color(self.row) {
                     self.color_before_picker = color;

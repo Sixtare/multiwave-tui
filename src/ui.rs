@@ -349,7 +349,7 @@ fn render_menu(frame: &mut Frame, app: &App) {
 fn render_color_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let palette = &app.palette;
-    // One extra line separates the checkboxes from the colors.
+    // One extra line separates the fade rows from the colors.
     let height = (Palette::ROWS as u16 + 3).min(area.height);
     // While the picker is open the popup and the picker are centered together.
     let group_width = if app.color.picker.is_some() && POPUP_WIDTH + PICKER_WIDTH <= area.width {
@@ -383,16 +383,6 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
             let selected = row == app.color.row;
             let text_style = if grayed_out {
                 Style::default().fg(Color::DarkGray)
-            } else if row == Palette::MIRROR_ROW {
-                // The checkbox shows its state: green when on, yellow when off. The cursor is
-                // shown by the `>` and bold text. The fade row keeps the default text colors.
-                let state = if palette.mirror_dimmed {
-                    Color::Green
-                } else {
-                    Color::Yellow
-                };
-                let style = Style::default().fg(state);
-                if selected { style.bold() } else { style }
             } else if selected {
                 Style::default().fg(Color::Cyan).bold()
             } else {
@@ -400,10 +390,6 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
             };
             let value = match palette.row_color(row) {
                 Some(color) => color_value(color, text_style),
-                None if row == Palette::MIRROR_ROW => {
-                    let mark = if palette.mirror_dimmed { "x" } else { " " };
-                    vec![Span::styled(format!("[{mark}] Darker"), text_style)]
-                }
                 None if row == Palette::FADE_ROW => {
                     vec![Span::styled(palette.fade_level_text(), text_style)]
                 }
@@ -1135,47 +1121,6 @@ mod tests {
         assert_eq!(label(top + 4), Color::DarkGray);
         assert_eq!(buffer[(swatch_x, top + 3)].fg, Color::Rgb(0, 255, 255));
         assert_eq!(buffer[(swatch_x, top + 4)].fg, Color::Rgb(0, 255, 255));
-    }
-
-    #[test]
-    fn test_mirror_checkbox_and_plain_mirror_colors_are_drawn() {
-        let mut app = App::new();
-        app.open_color_popup();
-        app.color.select_prev(&app.palette);
-        app.color.activate(&mut app.palette);
-        app.update_audio_bars(vec![1.0; 32]);
-        for _ in 0..30 {
-            app.tick();
-        }
-
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|frame| render(&mut app, frame)).unwrap();
-        let buffer = terminal.backend().buffer();
-
-        let text: String = (0..24)
-            .flat_map(|y| (0..80).map(move |x| (x, y)))
-            .map(|(x, y)| buffer[(x, y)].symbol().to_string())
-            .collect();
-        assert!(text.contains("[ ] Darker"));
-        let color_of = |buffer: &Buffer, word: &str| {
-            let line = |y: u16| -> String { (0..80).map(|x| buffer[(x, y)].symbol()).collect() };
-            let row = (0..24).find(|&y| line(y).contains(word)).unwrap();
-            let x = line(row).split(word).next().unwrap().chars().count() as u16;
-            buffer[(x, row)].fg
-        };
-        // Off: both the label and the checkbox are yellow. On: green.
-        assert_eq!(color_of(buffer, "Mirror"), Color::Yellow);
-        assert_eq!(color_of(buffer, "Darker"), Color::Yellow);
-        app.color.activate(&mut app.palette);
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|frame| render(&mut app, frame)).unwrap();
-        let on = terminal.backend().buffer();
-        assert_eq!(color_of(on, "Mirror"), Color::Green);
-        assert_eq!(color_of(on, "Darker"), Color::Green);
-        app.color.activate(&mut app.palette);
-        terminal.draw(|frame| render(&mut app, frame)).unwrap();
-        // The leftmost mirror cell has the same color as the bar above the divider.
-        assert_eq!(buffer[(8, 23)].fg, Color::Rgb(0, 255, 255));
     }
 
     #[test]

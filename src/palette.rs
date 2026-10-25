@@ -163,9 +163,6 @@ pub struct Palette {
     /// Colors of the bass, mids and treble. The mids and treble colors are kept while
     /// single-color mode hides them.
     pub bands: [BarColor; 3],
-    /// Whether the mirror reflection is a darker tone of the bar colors. Off, it uses the same
-    /// colors as the bars.
-    pub mirror_dimmed: bool,
     /// How much the bars fade from dark at the base to their full color at the top, in tenths
     /// (0 to `MAX_FADE_LEVEL`): the higher, the darker the base. At 0 the fade is
     /// off and every cell has its full color.
@@ -177,19 +174,16 @@ impl Default for Palette {
         Self {
             mode: ColorMode::Single,
             bands: [BarColor::CYAN, BarColor::BLUE, BarColor::PINK],
-            mirror_dimmed: true,
             fade_level: 5,
         }
     }
 }
 
 impl Palette {
-    /// Rows the picker shows: the mode row, bass, mids, treble, the fade level and the mirror checkbox.
-    pub const ROWS: usize = 6;
+    /// Rows the picker shows: the mode row, bass, mids, treble and the fade level.
+    pub const ROWS: usize = 5;
     /// The row of the fade level.
     pub const FADE_ROW: usize = 4;
-    /// The row of the mirror checkbox.
-    pub const MIRROR_ROW: usize = 5;
 
     /// Whether the cursor can rest on `row`. In single-color mode the mids and treble are grayed
     /// out, and in rainbow mode all three colors are, since none of them is used.
@@ -271,11 +265,6 @@ impl Palette {
         1.0 - self.fade_level as f32 / MAX_FADE_LEVEL as f32 * FADE_RANGE
     }
 
-    /// Turns the darker mirror tone on or off.
-    pub fn toggle_mirror_dimmed(&mut self) {
-        self.mirror_dimmed = !self.mirror_dimmed;
-    }
-
     /// Sets the color a picker row edits. Only the bass can be edited in single-color mode.
     pub fn set_row_color(&mut self, row: usize, color: BarColor) {
         if (1..=3).contains(&row) && self.row_selectable(row) {
@@ -327,16 +316,7 @@ impl Palette {
 
     /// The reflection's color at height `t` of a bar in vertical mode.
     pub fn mirror_height_color(&self, t: f32) -> Color {
-        self.reflection(self.height_color(t))
-    }
-
-    /// A reflection's tone for `color`: darker unless the mirror is not dimmed.
-    fn reflection(&self, color: BarColor) -> Color {
-        if self.mirror_dimmed {
-            color.mirror_color()
-        } else {
-            color.color()
-        }
+        self.height_color(t).mirror_color()
     }
 
     /// The label of a picker row. In vertical mode the three colors are the bar's base, middle
@@ -351,14 +331,13 @@ impl Palette {
             (2, _) => "Mids",
             (3, _) => "Treble",
             (Self::FADE_ROW, _) => "Fade",
-            _ => "Mirror",
+            _ => "Fade",
         }
     }
 
-    /// The color of bar `bar`'s reflection: a darker tone of its color unless the mirror is not
-    /// dimmed.
+    /// The color of bar `bar`'s reflection: a darker tone of its color.
     pub fn mirror_bar_color(&self, bar: usize, bar_count: usize) -> Color {
-        self.reflection(self.bar_color(bar, bar_count))
+        self.bar_color(bar, bar_count).mirror_color()
     }
 
     /// Short description for the on-screen notice.
@@ -574,15 +553,9 @@ mod tests {
                 .map(|row| palette.row_label(row))
                 .collect::<Vec<_>>()
         };
-        assert_eq!(
-            labels(&palette),
-            ["Mode", "Bass", "Mids", "Treble", "Fade", "Mirror"]
-        );
+        assert_eq!(labels(&palette), ["Mode", "Bass", "Mids", "Treble", "Fade"]);
         palette.mode = ColorMode::Vertical;
-        assert_eq!(
-            labels(&palette),
-            ["Mode", "Base", "Middle", "Top", "Fade", "Mirror"]
-        );
+        assert_eq!(labels(&palette), ["Mode", "Base", "Middle", "Top", "Fade"]);
     }
 
     #[test]
@@ -622,35 +595,18 @@ mod tests {
         palette.step_fade_level(true);
         assert_eq!(palette.fade_level_text(), "0.1");
         assert!(palette.row_selectable(Palette::FADE_ROW));
-        assert!(palette.row_selectable(Palette::MIRROR_ROW));
+        assert_eq!(palette.next_row(Palette::FADE_ROW, true), 0);
     }
 
     #[test]
     fn test_cursor_skips_grayed_out_rows() {
         let mut palette = Palette::default();
         assert_eq!(palette.next_row(3, true), 4);
-        assert_eq!(palette.next_row(4, true), 5);
-        assert_eq!(palette.next_row(5, true), 0);
+        assert_eq!(palette.next_row(4, true), 0);
         palette.mode = ColorMode::Single;
         assert_eq!(palette.next_row(1, true), 4);
         assert_eq!(palette.next_row(4, false), 1);
-        assert_eq!(palette.next_row(0, false), 5);
-    }
-
-    #[test]
-    fn test_mirror_without_dimming_uses_the_bar_colors() {
-        let mut palette = Palette::default();
-        for mode in [ColorMode::Gradient, ColorMode::Single] {
-            palette.mode = mode;
-            palette.mirror_dimmed = true;
-            let bar = palette.bar_color(5, 32);
-            assert_eq!(palette.mirror_bar_color(5, 32), bar.mirror_color());
-            palette.toggle_mirror_dimmed();
-            assert_eq!(palette.mirror_bar_color(5, 32), bar.color());
-        }
-        // The checkbox row never edits a band.
-        palette.set_row_color(Palette::MIRROR_ROW, BarColor::rgb(255, 0, 0));
-        assert_eq!(palette.bands[0], BarColor::CYAN);
+        assert_eq!(palette.next_row(0, false), 4);
     }
 
     #[test]
@@ -670,8 +626,8 @@ mod tests {
             .collect();
         assert!(hues.windows(2).all(|pair| pair[0] < pair[1]));
         assert!((0..32).all(|i| (palette.bar_color(i, 32).to_hsv().1 - 0.70).abs() < 0.01));
-        // Mids and treble rows, and the bass one, are grayed out; the mode and mirror stay.
-        assert!(palette.row_selectable(0) && palette.row_selectable(Palette::MIRROR_ROW));
+        // Mids and treble rows, and the bass one, are grayed out; the mode and fade stay.
+        assert!(palette.row_selectable(0) && palette.row_selectable(Palette::FADE_ROW));
         assert!((1..=3).all(|row| !palette.row_selectable(row)));
         assert_eq!(palette.next_row(0, true), Palette::FADE_ROW);
         assert_eq!(palette.describe(), "Rainbow");

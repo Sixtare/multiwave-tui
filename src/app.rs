@@ -521,7 +521,7 @@ mod tests {
         assert_eq!(app.palette.mode, ColorMode::Single);
         app.open_color_popup();
         app.color.select_prev(&app.palette);
-        assert_eq!(app.color.row, 5);
+        assert_eq!(app.color.row, 4);
         app.color.select_next(&app.palette);
         assert_eq!(app.color.row, 0);
         // Single color skips the mids and treble rows.
@@ -529,8 +529,7 @@ mod tests {
         app.color.select_next(&app.palette);
         assert_eq!(app.color.row, 4);
         app.color.select_next(&app.palette);
-        assert_eq!(app.color.row, 5);
-        app.color.select_next(&app.palette);
+        assert_eq!(app.color.row, 0);
 
         // Enter does nothing on the mode row; the arrows change the mode.
         app.color.activate(&mut app.palette);
@@ -541,8 +540,6 @@ mod tests {
         assert_eq!(app.palette.mode, ColorMode::Single);
         app.color.change_option(&mut app.palette, true);
         assert_eq!(app.color.picker, None);
-        app.color.select_prev(&app.palette);
-        assert_eq!(app.color.row, 5);
         app.color.select_prev(&app.palette);
         assert_eq!(app.color.row, 4);
         app.color.select_prev(&app.palette);
@@ -563,7 +560,6 @@ mod tests {
         let mut app = App::new();
         app.open_color_popup();
         app.color.select_prev(&app.palette);
-        app.color.select_prev(&app.palette);
         assert_eq!(app.color.row, Palette::FADE_ROW);
         assert_eq!(app.palette.fade_level, 5);
         // Enter does nothing; the arrows step the level by a tenth.
@@ -581,18 +577,6 @@ mod tests {
         app.color.select_next(&app.palette);
         app.color.select_prev(&app.palette);
         assert_eq!(app.color.row, Palette::FADE_ROW);
-    }
-
-    #[test]
-    fn test_mirror_row_toggles_the_checkbox_without_opening_the_list() {
-        let mut app = App::new();
-        app.open_color_popup();
-        app.color.select_prev(&app.palette);
-        app.color.activate(&mut app.palette);
-        assert!(!app.palette.mirror_dimmed);
-        assert_eq!(app.color.picker, None);
-        app.close_color_popup();
-        assert!(app.color_notice().is_some());
     }
 
     #[test]
