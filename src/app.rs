@@ -1,5 +1,8 @@
 use crate::{
+    bar_motion::BarMotion,
     color_session::ColorSession,
+    device_menu::DeviceMenu,
+    menu::MenuRow,
     notices::{NoticeKind, Notices},
     palette::Palette,
 };
@@ -24,10 +27,6 @@ const PLAIN_DECAY_FACTOR: f32 = 0.20;
 /// The frame rates the user can pick, and the one the animation constants were tuned at.
 pub const FPS_OPTIONS: [u32; 4] = [30, 60, 90, 120];
 pub const DEFAULT_FPS: u32 = 60;
-
-/// Number of rows in the main menu: output device, bar color, sensitivity, bars, smoothing, bar
-/// gap and frame rate.
-pub const MENU_ROWS: usize = 7;
 
 /// The one overlay drawn over the visualizer, which also takes the keys. At most one is open.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -57,10 +56,8 @@ pub struct App {
     pub bar_count: usize,
     /// Which notices are on screen.
     notices: Notices,
-    /// Vector containing normalized and smoothed audio bar magnitudes (0.0 to 1.0).
-    pub audio_bars: Vec<f32>,
-    /// Vector containing the target values most recently received from the FFT.
-    pub target_bars: Vec<f32>,
+    /// The animated bar heights (0.0 to 1.0) and the targets most recently received from the FFT.
+    pub motion: BarMotion,
     /// Manual sensitivity multiplier, applied by the audio processor on top of its automatic
     /// sensitivity.
     pub gain: f32,
@@ -78,18 +75,12 @@ pub struct App {
     pub decay_factor: f32,
     /// The overlay that is open, if any.
     pub overlay: Overlay,
-    /// Highlighted row of the main menu (see [`MENU_ROWS`]).
-    pub menu_row: usize,
+    /// Highlighted row of the main menu.
+    pub menu_row: MenuRow,
     /// Whether the open popup was opened from the main menu, which then comes back when it closes.
     return_to_menu: bool,
-    /// List of available audio device names for display in the popup menu.
-    pub devices: Vec<String>,
-    /// Index of the currently highlighted device in the popup menu.
-    pub selected_device_idx: usize,
-    /// Index of the currently active audio device being captured.
-    pub active_device_idx: usize,
-    /// First device row visible in the popup when the list is scrollable.
-    pub device_scroll_offset: usize,
+    /// The devices listed in the popup, with the cursor, the active one and the scroll position.
+    pub devices: DeviceMenu,
     /// Most recent audio device or stream error, if any.
     pub audio_error: Option<String>,
     /// How the bars are colored. While the color popup is open it holds the live preview.
@@ -107,8 +98,7 @@ impl Default for App {
             chosen_bar_count: MIN_BARS,
             bar_count: MIN_BARS,
             notices: Notices::default(),
-            audio_bars: vec![0.0; MIN_BARS],
-            target_bars: vec![0.0; MIN_BARS],
+            motion: BarMotion::new(MIN_BARS),
             gain: 1.0,
             smoothing: false,
             bar_gap: true,
@@ -116,12 +106,9 @@ impl Default for App {
             attack_factor: 0.40,
             decay_factor: 0.12,
             overlay: Overlay::None,
-            menu_row: 0,
+            menu_row: MenuRow::default(),
             return_to_menu: false,
-            devices: Vec::new(),
-            selected_device_idx: 0,
-            active_device_idx: 0,
-            device_scroll_offset: 0,
+            devices: DeviceMenu::default(),
             audio_error: None,
             palette: Palette::default(),
             color: ColorSession::default(),
@@ -138,9 +125,7 @@ impl App {
     /// Constructs a new instance of [`App`] with device names and an active index.
     pub fn with_devices(devices: Vec<String>, active_device_idx: usize) -> Self {
         Self {
-            devices,
-            selected_device_idx: active_device_idx,
-            active_device_idx,
+            devices: DeviceMenu::new(devices, active_device_idx),
             ..Self::default()
         }
     }
@@ -153,10 +138,7 @@ impl App {
         self.tick_counter += 1;
         let steps = DEFAULT_FPS as f32 / self.fps as f32;
         // Gradually decay targets for natural sound fade-out
-        let target_decay = 0.94f32.powf(steps);
-        for target in &mut self.target_bars {
-            *target = (*target * target_decay).max(0.0);
-        }
+        self.motion.decay_targets(steps);
         self.apply_response(steps);
     }
 
@@ -241,55 +223,16 @@ impl App {
         let count = self.chosen_bar_count.clamp(MIN_BARS, self.max_bar_count());
         if count != self.bar_count {
             self.bar_count = count;
-            self.audio_bars = resample(&self.audio_bars, count);
-            self.target_bars = resample(&self.target_bars, count);
+            self.motion.resize(count);
         }
-    }
-
-    /// Moves the popup selection cursor down.
-    pub fn select_next_device(&mut self) {
-        if !self.devices.is_empty() {
-            self.selected_device_idx = (self.selected_device_idx + 1) % self.devices.len();
-        }
-    }
-
-    /// Moves the popup selection cursor up.
-    pub fn select_prev_device(&mut self) {
-        if !self.devices.is_empty() {
-            if self.selected_device_idx == 0 {
-                self.selected_device_idx = self.devices.len() - 1;
-            } else {
-                self.selected_device_idx -= 1;
-            }
-        }
-    }
-
-    /// Scrolls the device popup so the selected row stays within `visible_rows`.
-    pub fn ensure_device_visible(&mut self, visible_rows: usize) {
-        if visible_rows == 0 || self.devices.is_empty() {
-            return;
-        }
-
-        let selected = self.selected_device_idx.min(self.devices.len() - 1);
-        let max_offset = self.devices.len().saturating_sub(visible_rows);
-
-        if selected < self.device_scroll_offset {
-            self.device_scroll_offset = selected;
-        } else if selected >= self.device_scroll_offset.saturating_add(visible_rows) {
-            self.device_scroll_offset = selected + 1 - visible_rows;
-        }
-
-        self.device_scroll_offset = self.device_scroll_offset.min(max_offset);
     }
 
     /// Updates audio bars received from the FFT and applies smoothing.
     pub fn update_audio_bars(&mut self, bars: Vec<f32>) {
         // A frame computed for a previous bar count can still be in flight after a change.
-        if bars.len() != self.bar_count {
+        if !self.motion.set_targets(bars) {
             return;
         }
-
-        self.target_bars = bars;
         // With smoothing on the bars only move on ticks, so the motion stays continuous.
         if !self.smoothing {
             self.apply_smoothing();
@@ -313,24 +256,7 @@ impl App {
         } else {
             (PLAIN_ATTACK_FACTOR, PLAIN_DECAY_FACTOR)
         };
-        let (attack, decay) = if steps == 1.0 {
-            (attack, decay)
-        } else {
-            (
-                1.0 - (1.0 - attack).powf(steps),
-                1.0 - (1.0 - decay).powf(steps),
-            )
-        };
-        for (current, &target) in self.audio_bars.iter_mut().zip(&self.target_bars) {
-            let factor = if target > *current { attack } else { decay };
-            *current += (target - *current) * factor;
-
-            if *current < 0.005 {
-                *current = 0.0;
-            } else if *current > 1.0 {
-                *current = 1.0;
-            }
-        }
+        self.motion.step(attack, decay, steps);
     }
 
     /// Increases visualization sensitivity/gain.
@@ -395,7 +321,7 @@ impl App {
     /// Opens the main menu with the cursor on its first row.
     pub fn open_menu(&mut self) {
         self.overlay = Overlay::Menu;
-        self.menu_row = 0;
+        self.menu_row = MenuRow::default();
     }
 
     /// Closes the main menu.
@@ -405,12 +331,12 @@ impl App {
 
     /// Moves the main menu cursor down, wrapping around.
     pub fn select_next_menu_row(&mut self) {
-        self.menu_row = (self.menu_row + 1) % MENU_ROWS;
+        self.menu_row = self.menu_row.next();
     }
 
     /// Moves the main menu cursor up, wrapping around.
     pub fn select_prev_menu_row(&mut self) {
-        self.menu_row = (self.menu_row + MENU_ROWS - 1) % MENU_ROWS;
+        self.menu_row = self.menu_row.previous();
     }
 
     /// Opens the output device popup, remembering whether the main menu was open under it.
@@ -448,6 +374,25 @@ impl App {
         }
     }
 
+    /// The text of every notice on screen, in the order they stack down the top-right corner.
+    pub fn visible_notices(&self) -> Vec<String> {
+        let on_off = |on: bool| if on { "on" } else { "off" };
+        [
+            self.bar_notice().map(|count| format!(" {count} bars ")),
+            self.gain_notice()
+                .map(|gain| format!(" sensitivity {gain:.2}x ")),
+            self.smoothing_notice()
+                .map(|on| format!(" smoothing {} ", on_off(on))),
+            self.bar_gap_notice()
+                .map(|on| format!(" bar gap {} ", on_off(on))),
+            self.fps_notice().map(|fps| format!(" {fps} fps ")),
+            self.color_notice().map(|color| format!(" color: {color} ")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
     /// The color choice to announce on screen right after the user confirmed it.
     pub fn color_notice(&self) -> Option<String> {
         self.notice_active(NoticeKind::Color)
@@ -467,13 +412,6 @@ fn round_gain(gain: f32) -> f32 {
 }
 
 /// Stretches `bars` to `len` entries by picking the nearest source bar for each new one.
-fn resample(bars: &[f32], len: usize) -> Vec<f32> {
-    if bars.is_empty() {
-        return vec![0.0; len];
-    }
-    (0..len).map(|i| bars[i * bars.len() / len]).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,7 +574,7 @@ mod tests {
     fn test_bar_count_starts_at_minimum() {
         let app = app_with_width(200);
         assert_eq!(app.bar_count, 32);
-        assert_eq!(app.audio_bars.len(), 32);
+        assert_eq!(app.motion.bars().len(), 32);
     }
 
     #[test]
@@ -645,8 +583,8 @@ mod tests {
         for expected in [40, 48, 56] {
             app.increase_bar_count();
             assert_eq!(app.bar_count, expected);
-            assert_eq!(app.audio_bars.len(), expected);
-            assert_eq!(app.target_bars.len(), expected);
+            assert_eq!(app.motion.bars().len(), expected);
+            assert_eq!(app.motion.targets().len(), expected);
         }
 
         for _ in 0..100 {
@@ -708,11 +646,11 @@ mod tests {
 
         app.set_terminal_width(120);
         assert_eq!(app.bar_count, 60);
-        assert_eq!(app.audio_bars.len(), 60);
+        assert_eq!(app.motion.bars().len(), 60);
 
         app.set_terminal_width(400);
         assert_eq!(app.bar_count, 96);
-        assert_eq!(app.audio_bars.len(), 96);
+        assert_eq!(app.motion.bars().len(), 96);
     }
 
     #[test]
@@ -748,13 +686,12 @@ mod tests {
     #[test]
     fn test_changing_bar_count_stretches_current_bars() {
         let mut app = app_with_width(200);
-        app.audio_bars = vec![0.5; 32];
-        app.target_bars = vec![0.5; 32];
+        app.motion = BarMotion::from_parts(vec![0.5; 32], vec![0.5; 32]);
 
         app.increase_bar_count();
 
-        assert_eq!(app.audio_bars, vec![0.5; 40]);
-        assert_eq!(app.target_bars, vec![0.5; 40]);
+        assert_eq!(app.motion.bars(), vec![0.5; 40]);
+        assert_eq!(app.motion.targets(), vec![0.5; 40]);
     }
 
     #[test]
@@ -764,9 +701,9 @@ mod tests {
 
         app.update_audio_bars(vec![1.0; 32]);
 
-        assert_eq!(app.target_bars, vec![0.0; 40]);
+        assert_eq!(app.motion.targets(), vec![0.0; 40]);
         app.update_audio_bars(vec![1.0; 40]);
-        assert_eq!(app.target_bars, vec![1.0; 40]);
+        assert_eq!(app.motion.targets(), vec![1.0; 40]);
     }
 
     #[test]
@@ -793,18 +730,18 @@ mod tests {
     #[test]
     fn test_app_update_audio_bars_smoothing() {
         let mut app = App::default();
-        assert_eq!(app.audio_bars[0], 0.0);
+        assert_eq!(app.motion.bars()[0], 0.0);
 
         let new_bars = vec![1.0; 32];
         app.update_audio_bars(new_bars);
         app.tick();
-        let risen = app.audio_bars[0];
+        let risen = app.motion.bars()[0];
         assert!(risen > 0.2 && risen < 1.0);
 
         let zero_bars = vec![0.0; 32];
         app.update_audio_bars(zero_bars);
         app.tick();
-        assert!(app.audio_bars[0] > 0.0 && app.audio_bars[0] < risen);
+        assert!(app.motion.bars()[0] > 0.0 && app.motion.bars()[0] < risen);
     }
 
     #[test]
@@ -815,7 +752,7 @@ mod tests {
         app.update_audio_bars(vec![1.0; 32]);
 
         // The plain response moves the bars right away, without waiting for a tick.
-        assert!(app.audio_bars[0] > 0.6);
+        assert!(app.motion.bars()[0] > 0.6);
     }
 
     #[test]
@@ -843,11 +780,11 @@ mod tests {
         };
         app.update_audio_bars(vec![1.0; 32]);
 
-        let mut previous = app.audio_bars[0];
+        let mut previous = app.motion.bars()[0];
         for _ in 0..5 {
             app.tick();
-            assert!(app.audio_bars[0] > previous);
-            previous = app.audio_bars[0];
+            assert!(app.motion.bars()[0] > previous);
+            previous = app.motion.bars()[0];
         }
     }
 
@@ -862,25 +799,25 @@ mod tests {
 
         let mut down = App {
             smoothing: true,
-            audio_bars: vec![1.0; 32],
+            motion: BarMotion::from_parts(vec![1.0; 32], vec![0.0; 32]),
             ..App::default()
         };
         down.update_audio_bars(vec![0.0; 32]);
         down.tick();
 
-        assert!(1.0 - down.audio_bars[0] < up.audio_bars[0]);
+        assert!(1.0 - down.motion.bars()[0] < up.motion.bars()[0]);
     }
 
     #[test]
     fn test_a_brief_dip_barely_moves_the_bar() {
         let mut steady = App {
             smoothing: true,
-            audio_bars: vec![0.8; 32],
+            motion: BarMotion::from_parts(vec![0.8; 32], vec![0.0; 32]),
             ..App::default()
         };
         let mut dipping = App {
             smoothing: true,
-            audio_bars: vec![0.8; 32],
+            motion: BarMotion::from_parts(vec![0.8; 32], vec![0.0; 32]),
             ..App::default()
         };
 
@@ -892,19 +829,19 @@ mod tests {
             dipping.tick();
         }
 
-        assert!((steady.audio_bars[0] - dipping.audio_bars[0]).abs() < 0.1);
+        assert!((steady.motion.bars()[0] - dipping.motion.bars()[0]).abs() < 0.1);
     }
 
     #[test]
     fn test_app_gain_adjustment() {
         let mut app = App {
-            audio_bars: vec![0.4; 32],
+            motion: BarMotion::from_parts(vec![0.4; 32], vec![0.0; 32]),
             ..App::default()
         };
         app.increase_gain();
         assert_eq!(app.gain, 1.1);
         // The gain reaches the bars through the audio processor, not through the app.
-        assert_eq!(app.audio_bars[0], 0.4);
+        assert_eq!(app.motion.bars()[0], 0.4);
     }
 
     #[test]
@@ -1005,20 +942,20 @@ mod tests {
         let devices = (0..10).map(|i| format!("Device {i}")).collect();
         let mut app = App::with_devices(devices, 0);
 
-        app.ensure_device_visible(4);
-        assert_eq!(app.device_scroll_offset, 0);
+        app.devices.ensure_visible(4);
+        assert_eq!(app.devices.scroll_offset(), 0);
 
-        app.selected_device_idx = 5;
-        app.ensure_device_visible(4);
-        assert_eq!(app.device_scroll_offset, 2);
+        app.devices.selected = 5;
+        app.devices.ensure_visible(4);
+        assert_eq!(app.devices.scroll_offset(), 2);
 
-        app.selected_device_idx = 0;
-        app.ensure_device_visible(4);
-        assert_eq!(app.device_scroll_offset, 0);
+        app.devices.selected = 0;
+        app.devices.ensure_visible(4);
+        assert_eq!(app.devices.scroll_offset(), 0);
 
-        app.selected_device_idx = 9;
-        app.ensure_device_visible(4);
-        assert_eq!(app.device_scroll_offset, 6);
+        app.devices.selected = 9;
+        app.devices.ensure_visible(4);
+        assert_eq!(app.devices.scroll_offset(), 6);
     }
 
     #[test]
@@ -1029,21 +966,21 @@ mod tests {
             "HDMI Audio".to_string(),
         ];
         let mut app = App::with_devices(devices, 0);
-        assert_eq!(app.selected_device_idx, 0);
+        assert_eq!(app.devices.selected, 0);
 
-        app.select_next_device();
-        assert_eq!(app.selected_device_idx, 1);
+        app.devices.select_next();
+        assert_eq!(app.devices.selected, 1);
 
-        app.select_next_device();
-        assert_eq!(app.selected_device_idx, 2);
+        app.devices.select_next();
+        assert_eq!(app.devices.selected, 2);
 
         // Wrap-around forward
-        app.select_next_device();
-        assert_eq!(app.selected_device_idx, 0);
+        app.devices.select_next();
+        assert_eq!(app.devices.selected, 0);
 
         // Wrap-around backward
-        app.select_prev_device();
-        assert_eq!(app.selected_device_idx, 2);
+        app.devices.select_prev();
+        assert_eq!(app.devices.selected, 2);
     }
 
     #[test]
@@ -1065,17 +1002,32 @@ mod tests {
         let fall_after_one_second = |fps: u32| {
             let mut app = App::new();
             app.fps = fps;
-            app.audio_bars = vec![1.0; 32];
+            app.motion = BarMotion::from_parts(vec![1.0; 32], vec![0.0; 32]);
             for _ in 0..fps {
                 app.tick();
             }
-            app.audio_bars[0]
+            app.motion.bars()[0]
         };
         let at_60 = fall_after_one_second(60);
         for fps in [30, 90, 120] {
             let at = fall_after_one_second(fps);
             assert!((at - at_60).abs() < 0.01, "{fps} fps: {at} vs {at_60}");
         }
+    }
+
+    #[test]
+    fn test_visible_notices_stack_in_a_fixed_order() {
+        let mut app = app_with_width(200);
+        assert!(app.visible_notices().is_empty());
+
+        app.increase_gain();
+        app.toggle_bar_gap();
+        app.increase_bar_count();
+
+        assert_eq!(
+            app.visible_notices(),
+            [" 40 bars ", " sensitivity 1.10x ", " bar gap off "]
+        );
     }
 
     #[test]

@@ -11,9 +11,11 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, MENU_ROWS, Overlay},
+    app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, Overlay},
     audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
+    device_menu::DeviceMenu,
+    menu::MenuRow,
     palette::{BarColor, Palette},
 };
 
@@ -27,22 +29,11 @@ pub struct FrameState {
     /// Displayed bars; left empty while the popup hides the visualizer.
     bars: Vec<f32>,
     overlay: Overlay,
-    menu_row: usize,
-    devices: Vec<String>,
-    selected_device_idx: usize,
-    active_device_idx: usize,
-    device_scroll_offset: usize,
+    menu_row: MenuRow,
+    devices: DeviceMenu,
     audio_error: Option<String>,
-    /// Bar count announcement, while it is on screen.
-    bar_notice: Option<usize>,
-    /// Sensitivity announcement, while it is on screen.
-    gain_notice: Option<f32>,
-    /// Smoothing announcement, while it is on screen.
-    smoothing_notice: Option<bool>,
-    /// Bar gap announcement, while it is on screen.
-    gap_notice: Option<bool>,
-    /// Frame rate announcement, while it is on screen.
-    fps_notice: Option<u32>,
+    /// Announcements on screen, top to bottom; none while the device popup is open.
+    notices: Vec<String>,
     /// Whether a blank column separates the bars.
     bar_gap: bool,
     palette: Palette,
@@ -50,8 +41,6 @@ pub struct FrameState {
     gain: f32,
     color_row: usize,
     color_picker: Option<ColorPicker>,
-    /// Color announcement, while it is on screen.
-    color_notice: Option<String>,
 }
 
 impl FrameState {
@@ -63,26 +52,22 @@ impl FrameState {
             bars: if devices_open {
                 Vec::new()
             } else {
-                app.audio_bars.clone()
+                app.motion.bars().to_vec()
             },
             overlay: app.overlay,
             menu_row: app.menu_row,
             devices: app.devices.clone(),
-            selected_device_idx: app.selected_device_idx,
-            active_device_idx: app.active_device_idx,
-            device_scroll_offset: app.device_scroll_offset,
             audio_error: app.audio_error.clone(),
-            bar_notice: app.bar_notice().filter(|_| !devices_open),
-            gain_notice: app.gain_notice().filter(|_| !devices_open),
-            smoothing_notice: app.smoothing_notice().filter(|_| !devices_open),
-            gap_notice: app.bar_gap_notice().filter(|_| !devices_open),
-            fps_notice: app.fps_notice().filter(|_| !devices_open),
+            notices: if devices_open {
+                Vec::new()
+            } else {
+                app.visible_notices()
+            },
             bar_gap: app.bar_gap,
             palette: app.palette,
             gain: app.gain,
             color_row: app.color.row,
             color_picker: app.color.picker.clone(),
-            color_notice: app.color_notice().filter(|_| !devices_open),
         }
     }
 }
@@ -94,7 +79,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             draw_soundwave(
                 frame,
                 frame.area(),
-                &app.audio_bars,
+                app.motion.bars(),
                 &app.palette,
                 app.gain,
                 app.bar_gap,
@@ -111,31 +96,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     }
 
     // Notices stack down the top-right corner, so changing both settings at once shows both.
-    let mut notice_row = 0;
-    if let Some(count) = app.bar_notice().filter(|_| !devices_open) {
-        render_notice(frame, notice_row, &format!(" {count} bars "));
-        notice_row += 1;
-    }
-    if let Some(gain) = app.gain_notice().filter(|_| !devices_open) {
-        render_notice(frame, notice_row, &format!(" sensitivity {gain:.2}x "));
-        notice_row += 1;
-    }
-    if let Some(on) = app.smoothing_notice().filter(|_| !devices_open) {
-        let state = if on { "on" } else { "off" };
-        render_notice(frame, notice_row, &format!(" smoothing {state} "));
-        notice_row += 1;
-    }
-    if let Some(on) = app.bar_gap_notice().filter(|_| !devices_open) {
-        let state = if on { "on" } else { "off" };
-        render_notice(frame, notice_row, &format!(" bar gap {state} "));
-        notice_row += 1;
-    }
-    if let Some(fps) = app.fps_notice().filter(|_| !devices_open) {
-        render_notice(frame, notice_row, &format!(" {fps} fps "));
-        notice_row += 1;
-    }
-    if let Some(color) = app.color_notice().filter(|_| !devices_open) {
-        render_notice(frame, notice_row, &format!(" color: {color} "));
+    if !devices_open {
+        for (row, text) in app.visible_notices().iter().enumerate() {
+            render_notice(frame, row as u16, text);
+        }
     }
 
     if let Some(error) = &app.audio_error {
@@ -215,7 +179,7 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
         .border_type(BorderType::Rounded)
         .style(Style::default());
 
-    let items_count = app.devices.len().max(1);
+    let items_count = app.devices.names.len().max(1);
     let desired_height = (items_count as u16 + 4).clamp(6, 18);
     // Keep a small margin around the popup, and never exceed the terminal height.
     let max_height = area.height.saturating_sub(2).max(3).min(area.height);
@@ -227,24 +191,24 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
 
     let list_height = popup_height.saturating_sub(2) as usize;
     if list_height > 0 {
-        app.ensure_device_visible(list_height);
+        app.devices.ensure_visible(list_height);
     }
     let needs_scrollbar =
-        app.devices.len() > list_height && list_height > 0 && centered_area.width > 2;
+        app.devices.names.len() > list_height && list_height > 0 && centered_area.width > 2;
 
     let inner_area = popup_block.inner(centered_area);
     frame.render_widget(popup_block, centered_area);
 
     let mut lines = Vec::new();
-    if app.devices.is_empty() {
+    if app.devices.names.is_empty() {
         lines.push(Line::styled(
             "   No output devices detected.",
             Style::default().fg(Color::DarkGray),
         ));
     } else {
-        for (i, name) in app.devices.iter().enumerate() {
-            let is_selected = i == app.selected_device_idx;
-            let is_active = i == app.active_device_idx;
+        for (i, name) in app.devices.names.iter().enumerate() {
+            let is_selected = i == app.devices.selected;
+            let is_active = i == app.devices.active;
 
             let prefix = if is_selected { " > " } else { "   " };
             let suffix = if is_active { " [Active]" } else { "" };
@@ -264,7 +228,7 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
 
     let paragraph = Paragraph::new(lines)
         .alignment(Alignment::Left)
-        .scroll((app.device_scroll_offset as u16, 0));
+        .scroll((app.devices.scroll_offset() as u16, 0));
 
     let mut content_area = inner_area;
     if needs_scrollbar && content_area.width > 0 {
@@ -281,8 +245,8 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
             width: 1,
             height: inner_area.height,
         };
-        let mut scrollbar_state = ScrollbarState::new(app.devices.len())
-            .position(app.selected_device_idx.min(app.devices.len() - 1))
+        let mut scrollbar_state = ScrollbarState::new(app.devices.names.len())
+            .position(app.devices.selected.min(app.devices.names.len() - 1))
             .viewport_content_length(list_height);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
@@ -311,7 +275,7 @@ const PICKER_HEIGHT: u16 = SQUARE_ROWS as u16 + 2 + 2;
 /// the key that reaches each one directly, row for row.
 fn render_menu(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    let height = (MENU_ROWS as u16 + 2).min(area.height);
+    let height = (MenuRow::ALL.len() as u16 + 2).min(area.height);
     // The two boxes are centered together on the screen.
     let group_width = (MENU_WIDTH + SHORTCUTS_WIDTH).min(area.width);
     let group = area.centered(Constraint::Length(group_width), Constraint::Length(height));
@@ -332,34 +296,27 @@ fn render_menu(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, menu_area);
     frame.render_widget(block, menu_area);
 
-    let rows = [
-        ("Output device", String::new(), "O"),
-        ("Bar color", app.palette.mode.label().to_string(), "C"),
-        ("Sensitivity", format!("◀ {:.2}x ▶", app.gain), "↑/↓"),
-        ("Bars", format!("◀ {} ▶", app.bar_count), "←/→"),
-        (
-            "Smoothing",
-            format!("◀ {} ▶", if app.smoothing { "on" } else { "off" }),
-            "S",
-        ),
-        (
-            "Bar gap",
-            format!("◀ {} ▶", if app.bar_gap { "on" } else { "off" }),
-            "G",
-        ),
-        ("FPS", format!("◀ {} ▶", app.fps), "F"),
-    ];
-    let lines: Vec<Line> = rows
+    let on_off = |on: bool| format!("◀ {} ▶", if on { "on" } else { "off" });
+    let value = |row: MenuRow| match row {
+        MenuRow::Device => String::new(),
+        MenuRow::Color => app.palette.mode.label().to_string(),
+        MenuRow::Sensitivity => format!("◀ {:.2}x ▶", app.gain),
+        MenuRow::Bars => format!("◀ {} ▶", app.bar_count),
+        MenuRow::Smoothing => on_off(app.smoothing),
+        MenuRow::BarGap => on_off(app.bar_gap),
+        MenuRow::Fps => format!("◀ {} ▶", app.fps),
+    };
+    let lines: Vec<Line> = MenuRow::ALL
         .iter()
-        .enumerate()
-        .map(|(row, (label, value, _))| {
-            let style = if row == app.menu_row {
+        .map(|&row| {
+            let selected = row == app.menu_row;
+            let style = if selected {
                 Style::default().fg(Color::Cyan).bold()
             } else {
                 Style::default().fg(Color::White)
             };
-            let cursor = if row == app.menu_row { ">" } else { " " };
-            Line::styled(format!("{cursor} {label:<14}{value}"), style)
+            let cursor = if selected { ">" } else { " " };
+            Line::styled(format!("{cursor} {:<14}{}", row.label(), value(row)), style)
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
@@ -379,9 +336,9 @@ fn render_menu(frame: &mut Frame, app: &App) {
     let inner = block.inner(shortcuts_area);
     frame.render_widget(Clear, shortcuts_area);
     frame.render_widget(block, shortcuts_area);
-    let lines: Vec<Line> = rows
+    let lines: Vec<Line> = MenuRow::ALL
         .iter()
-        .map(|(_, _, shortcut)| Line::from(*shortcut).centered())
+        .map(|row| Line::from(row.shortcut()).centered())
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
 }
@@ -974,7 +931,7 @@ mod tests {
         }
         let after = FrameState::capture(&app, SIZE);
         assert_ne!(during, after);
-        assert_eq!(after.bar_notice, None);
+        assert!(after.notices.is_empty());
     }
 
     #[test]
@@ -1051,7 +1008,7 @@ mod tests {
         }
         let after = FrameState::capture(&app, SIZE);
         assert_ne!(during, after);
-        assert_eq!(after.gain_notice, None);
+        assert!(after.notices.is_empty());
     }
 
     #[test]
@@ -1062,12 +1019,12 @@ mod tests {
         app.toggle_smoothing();
         let during = FrameState::capture(&app, SIZE);
         assert_ne!(before, during);
-        assert_eq!(during.smoothing_notice, Some(true));
+        assert_eq!(during.notices, [" smoothing on "]);
 
         for _ in 0..90 {
             app.tick();
         }
-        assert_eq!(FrameState::capture(&app, SIZE).smoothing_notice, None);
+        assert!(FrameState::capture(&app, SIZE).notices.is_empty());
     }
 
     #[test]
@@ -1258,8 +1215,8 @@ mod tests {
         let top_row: String = (0..40).map(|x| buffer[(x, 0)].symbol()).collect();
         assert!(top_row.ends_with(" color: Gradient "), "{top_row:?}");
         assert_eq!(
-            FrameState::capture(&app, SIZE).color_notice.as_deref(),
-            Some("Gradient")
+            FrameState::capture(&app, SIZE).notices,
+            [" color: Gradient "]
         );
     }
 

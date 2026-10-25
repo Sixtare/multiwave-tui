@@ -4,6 +4,7 @@ use crate::{
     app::{App, Overlay},
     color_picker::ColorPicker,
     event::{BatchEvent, EventBatch},
+    menu::MenuRow,
 };
 
 /// Actions that require external handling (e.g., audio hardware), performed by `main`.
@@ -147,24 +148,24 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
         KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
         KeyCode::Char('f') | KeyCode::Char('F') => app.change_fps(true),
         KeyCode::Enter => match app.menu_row {
-            0 => app.open_device_popup(),
-            1 => app.open_color_popup(),
-            4 => app.toggle_smoothing(),
-            5 => app.toggle_bar_gap(),
-            6 => app.change_fps(true),
-            _ => {}
+            MenuRow::Device => app.open_device_popup(),
+            MenuRow::Color => app.open_color_popup(),
+            MenuRow::Smoothing => app.toggle_smoothing(),
+            MenuRow::BarGap => app.toggle_bar_gap(),
+            MenuRow::Fps => app.change_fps(true),
+            MenuRow::Sensitivity | MenuRow::Bars => {}
         },
         KeyCode::Left | KeyCode::Right => {
             let forward = key_event.code == KeyCode::Right;
             match (app.menu_row, forward) {
-                (2, true) => app.increase_gain(),
-                (2, false) => app.decrease_gain(),
-                (3, true) => app.increase_bar_count(),
-                (3, false) => app.decrease_bar_count(),
-                (4, _) => app.toggle_smoothing(),
-                (5, _) => app.toggle_bar_gap(),
-                (6, forward) => app.change_fps(forward),
-                _ => {}
+                (MenuRow::Sensitivity, true) => app.increase_gain(),
+                (MenuRow::Sensitivity, false) => app.decrease_gain(),
+                (MenuRow::Bars, true) => app.increase_bar_count(),
+                (MenuRow::Bars, false) => app.decrease_bar_count(),
+                (MenuRow::Smoothing, _) => app.toggle_smoothing(),
+                (MenuRow::BarGap, _) => app.toggle_bar_gap(),
+                (MenuRow::Fps, forward) => app.change_fps(forward),
+                (MenuRow::Device | MenuRow::Color, _) => {}
             }
         }
         _ => {}
@@ -205,15 +206,15 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
                 app.close_device_popup();
             }
             KeyCode::Up => {
-                app.select_prev_device();
+                app.devices.select_prev();
             }
             KeyCode::Down => {
-                app.select_next_device();
+                app.devices.select_next();
             }
             KeyCode::Enter => {
                 // Active index is updated only after the stream starts successfully.
                 app.close_device_popup();
-                return Some(AppAction::ChangeDevice(app.selected_device_idx));
+                return Some(AppAction::ChangeDevice(app.devices.selected));
             }
             KeyCode::Char('c') | KeyCode::Char('C')
                 if key_event.modifiers == KeyModifiers::CONTROL =>
@@ -291,8 +292,8 @@ mod tests {
         expected.tick();
         expected.tick();
         assert_eq!(app.bar_count, 48);
-        assert_eq!(app.target_bars, expected.target_bars);
-        assert_eq!(app.audio_bars, expected.audio_bars);
+        assert_eq!(app.motion.targets(), expected.motion.targets());
+        assert_eq!(app.motion.bars(), expected.motion.bars());
         assert_eq!(app.tick_counter, 2);
         assert!(outcome.draw);
         assert_eq!(
@@ -597,7 +598,7 @@ mod tests {
         assert_eq!(app.fps, 90);
 
         press(&mut app, KeyCode::Down);
-        assert_eq!(app.menu_row, 0);
+        assert_eq!(app.menu_row, MenuRow::Device);
     }
 
     #[test]
@@ -632,7 +633,7 @@ mod tests {
     fn test_batch_stops_at_quit() {
         let mut app = App::with_devices(vec!["A".into(), "B".into()], 0);
         app.overlay = Overlay::Devices;
-        app.selected_device_idx = 1;
+        app.devices.selected = 1;
 
         let outcome = apply_batch(
             &mut app,

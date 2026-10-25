@@ -1,8 +1,12 @@
 pub mod app;
 pub mod audio_processor;
+pub mod bar_motion;
+pub mod capture_settings;
 pub mod color_picker;
 pub mod color_session;
+pub mod device_menu;
 pub mod event;
+pub mod menu;
 pub mod notices;
 pub mod palette;
 pub mod pulse;
@@ -18,7 +22,7 @@ mod tests {
     #[test]
     fn test_app_creation() {
         let app = app::App::new();
-        assert_eq!(app.audio_bars.len(), 32);
+        assert_eq!(app.motion.bars().len(), 32);
         assert_eq!(app.gain, 1.0);
     }
 
