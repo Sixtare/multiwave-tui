@@ -54,7 +54,7 @@ impl FrameState {
             bars: if devices_open {
                 Vec::new()
             } else {
-                app.audio_bars.clone()
+                app.motion.bars().to_vec()
             },
             overlay: app.overlay,
             menu_row: app.menu_row,
@@ -84,7 +84,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             draw_soundwave(
                 frame,
                 frame.area(),
-                &app.audio_bars,
+                app.motion.bars(),
                 &app.palette,
                 app.gain,
                 app.bar_gap,

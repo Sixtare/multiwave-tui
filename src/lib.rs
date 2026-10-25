@@ -1,5 +1,6 @@
 pub mod app;
 pub mod audio_processor;
+pub mod bar_motion;
 pub mod capture_settings;
 pub mod color_picker;
 pub mod color_session;
@@ -20,7 +21,7 @@ mod tests {
     #[test]
     fn test_app_creation() {
         let app = app::App::new();
-        assert_eq!(app.audio_bars.len(), 32);
+        assert_eq!(app.motion.bars().len(), 32);
         assert_eq!(app.gain, 1.0);
     }
 

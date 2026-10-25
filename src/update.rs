@@ -292,8 +292,8 @@ mod tests {
         expected.tick();
         expected.tick();
         assert_eq!(app.bar_count, 48);
-        assert_eq!(app.target_bars, expected.target_bars);
-        assert_eq!(app.audio_bars, expected.audio_bars);
+        assert_eq!(app.motion.targets(), expected.motion.targets());
+        assert_eq!(app.motion.bars(), expected.motion.bars());
         assert_eq!(app.tick_counter, 2);
         assert!(outcome.draw);
         assert_eq!(

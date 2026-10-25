@@ -1,6 +1,9 @@
 /// Application.
 pub mod app;
 
+/// Animated bar heights.
+pub mod bar_motion;
+
 /// Audio signal processing with realfft.
 pub mod audio_processor;
 

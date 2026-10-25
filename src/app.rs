@@ -1,4 +1,5 @@
 use crate::{
+    bar_motion::BarMotion,
     color_session::ColorSession,
     menu::MenuRow,
     notices::{NoticeKind, Notices},
@@ -54,10 +55,8 @@ pub struct App {
     pub bar_count: usize,
     /// Which notices are on screen.
     notices: Notices,
-    /// Vector containing normalized and smoothed audio bar magnitudes (0.0 to 1.0).
-    pub audio_bars: Vec<f32>,
-    /// Vector containing the target values most recently received from the FFT.
-    pub target_bars: Vec<f32>,
+    /// The animated bar heights (0.0 to 1.0) and the targets most recently received from the FFT.
+    pub motion: BarMotion,
     /// Manual sensitivity multiplier, applied by the audio processor on top of its automatic
     /// sensitivity.
     pub gain: f32,
@@ -104,8 +103,7 @@ impl Default for App {
             chosen_bar_count: MIN_BARS,
             bar_count: MIN_BARS,
             notices: Notices::default(),
-            audio_bars: vec![0.0; MIN_BARS],
-            target_bars: vec![0.0; MIN_BARS],
+            motion: BarMotion::new(MIN_BARS),
             gain: 1.0,
             smoothing: false,
             bar_gap: true,
@@ -150,10 +148,7 @@ impl App {
         self.tick_counter += 1;
         let steps = DEFAULT_FPS as f32 / self.fps as f32;
         // Gradually decay targets for natural sound fade-out
-        let target_decay = 0.94f32.powf(steps);
-        for target in &mut self.target_bars {
-            *target = (*target * target_decay).max(0.0);
-        }
+        self.motion.decay_targets(steps);
         self.apply_response(steps);
     }
 
@@ -238,8 +233,7 @@ impl App {
         let count = self.chosen_bar_count.clamp(MIN_BARS, self.max_bar_count());
         if count != self.bar_count {
             self.bar_count = count;
-            self.audio_bars = resample(&self.audio_bars, count);
-            self.target_bars = resample(&self.target_bars, count);
+            self.motion.resize(count);
         }
     }
 
@@ -282,11 +276,9 @@ impl App {
     /// Updates audio bars received from the FFT and applies smoothing.
     pub fn update_audio_bars(&mut self, bars: Vec<f32>) {
         // A frame computed for a previous bar count can still be in flight after a change.
-        if bars.len() != self.bar_count {
+        if !self.motion.set_targets(bars) {
             return;
         }
-
-        self.target_bars = bars;
         // With smoothing on the bars only move on ticks, so the motion stays continuous.
         if !self.smoothing {
             self.apply_smoothing();
@@ -310,24 +302,7 @@ impl App {
         } else {
             (PLAIN_ATTACK_FACTOR, PLAIN_DECAY_FACTOR)
         };
-        let (attack, decay) = if steps == 1.0 {
-            (attack, decay)
-        } else {
-            (
-                1.0 - (1.0 - attack).powf(steps),
-                1.0 - (1.0 - decay).powf(steps),
-            )
-        };
-        for (current, &target) in self.audio_bars.iter_mut().zip(&self.target_bars) {
-            let factor = if target > *current { attack } else { decay };
-            *current += (target - *current) * factor;
-
-            if *current < 0.005 {
-                *current = 0.0;
-            } else if *current > 1.0 {
-                *current = 1.0;
-            }
-        }
+        self.motion.step(attack, decay, steps);
     }
 
     /// Increases visualization sensitivity/gain.
@@ -483,13 +458,6 @@ fn round_gain(gain: f32) -> f32 {
 }
 
 /// Stretches `bars` to `len` entries by picking the nearest source bar for each new one.
-fn resample(bars: &[f32], len: usize) -> Vec<f32> {
-    if bars.is_empty() {
-        return vec![0.0; len];
-    }
-    (0..len).map(|i| bars[i * bars.len() / len]).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,7 +620,7 @@ mod tests {
     fn test_bar_count_starts_at_minimum() {
         let app = app_with_width(200);
         assert_eq!(app.bar_count, 32);
-        assert_eq!(app.audio_bars.len(), 32);
+        assert_eq!(app.motion.bars().len(), 32);
     }
 
     #[test]
@@ -661,8 +629,8 @@ mod tests {
         for expected in [40, 48, 56] {
             app.increase_bar_count();
             assert_eq!(app.bar_count, expected);
-            assert_eq!(app.audio_bars.len(), expected);
-            assert_eq!(app.target_bars.len(), expected);
+            assert_eq!(app.motion.bars().len(), expected);
+            assert_eq!(app.motion.targets().len(), expected);
         }
 
         for _ in 0..100 {
@@ -724,11 +692,11 @@ mod tests {
 
         app.set_terminal_width(120);
         assert_eq!(app.bar_count, 60);
-        assert_eq!(app.audio_bars.len(), 60);
+        assert_eq!(app.motion.bars().len(), 60);
 
         app.set_terminal_width(400);
         assert_eq!(app.bar_count, 96);
-        assert_eq!(app.audio_bars.len(), 96);
+        assert_eq!(app.motion.bars().len(), 96);
     }
 
     #[test]
@@ -764,13 +732,12 @@ mod tests {
     #[test]
     fn test_changing_bar_count_stretches_current_bars() {
         let mut app = app_with_width(200);
-        app.audio_bars = vec![0.5; 32];
-        app.target_bars = vec![0.5; 32];
+        app.motion = BarMotion::from_parts(vec![0.5; 32], vec![0.5; 32]);
 
         app.increase_bar_count();
 
-        assert_eq!(app.audio_bars, vec![0.5; 40]);
-        assert_eq!(app.target_bars, vec![0.5; 40]);
+        assert_eq!(app.motion.bars(), vec![0.5; 40]);
+        assert_eq!(app.motion.targets(), vec![0.5; 40]);
     }
 
     #[test]
@@ -780,9 +747,9 @@ mod tests {
 
         app.update_audio_bars(vec![1.0; 32]);
 
-        assert_eq!(app.target_bars, vec![0.0; 40]);
+        assert_eq!(app.motion.targets(), vec![0.0; 40]);
         app.update_audio_bars(vec![1.0; 40]);
-        assert_eq!(app.target_bars, vec![1.0; 40]);
+        assert_eq!(app.motion.targets(), vec![1.0; 40]);
     }
 
     #[test]
@@ -809,18 +776,18 @@ mod tests {
     #[test]
     fn test_app_update_audio_bars_smoothing() {
         let mut app = App::default();
-        assert_eq!(app.audio_bars[0], 0.0);
+        assert_eq!(app.motion.bars()[0], 0.0);
 
         let new_bars = vec![1.0; 32];
         app.update_audio_bars(new_bars);
         app.tick();
-        let risen = app.audio_bars[0];
+        let risen = app.motion.bars()[0];
         assert!(risen > 0.2 && risen < 1.0);
 
         let zero_bars = vec![0.0; 32];
         app.update_audio_bars(zero_bars);
         app.tick();
-        assert!(app.audio_bars[0] > 0.0 && app.audio_bars[0] < risen);
+        assert!(app.motion.bars()[0] > 0.0 && app.motion.bars()[0] < risen);
     }
 
     #[test]
@@ -831,7 +798,7 @@ mod tests {
         app.update_audio_bars(vec![1.0; 32]);
 
         // The plain response moves the bars right away, without waiting for a tick.
-        assert!(app.audio_bars[0] > 0.6);
+        assert!(app.motion.bars()[0] > 0.6);
     }
 
     #[test]
@@ -859,11 +826,11 @@ mod tests {
         };
         app.update_audio_bars(vec![1.0; 32]);
 
-        let mut previous = app.audio_bars[0];
+        let mut previous = app.motion.bars()[0];
         for _ in 0..5 {
             app.tick();
-            assert!(app.audio_bars[0] > previous);
-            previous = app.audio_bars[0];
+            assert!(app.motion.bars()[0] > previous);
+            previous = app.motion.bars()[0];
         }
     }
 
@@ -878,25 +845,25 @@ mod tests {
 
         let mut down = App {
             smoothing: true,
-            audio_bars: vec![1.0; 32],
+            motion: BarMotion::from_parts(vec![1.0; 32], vec![0.0; 32]),
             ..App::default()
         };
         down.update_audio_bars(vec![0.0; 32]);
         down.tick();
 
-        assert!(1.0 - down.audio_bars[0] < up.audio_bars[0]);
+        assert!(1.0 - down.motion.bars()[0] < up.motion.bars()[0]);
     }
 
     #[test]
     fn test_a_brief_dip_barely_moves_the_bar() {
         let mut steady = App {
             smoothing: true,
-            audio_bars: vec![0.8; 32],
+            motion: BarMotion::from_parts(vec![0.8; 32], vec![0.0; 32]),
             ..App::default()
         };
         let mut dipping = App {
             smoothing: true,
-            audio_bars: vec![0.8; 32],
+            motion: BarMotion::from_parts(vec![0.8; 32], vec![0.0; 32]),
             ..App::default()
         };
 
@@ -908,19 +875,19 @@ mod tests {
             dipping.tick();
         }
 
-        assert!((steady.audio_bars[0] - dipping.audio_bars[0]).abs() < 0.1);
+        assert!((steady.motion.bars()[0] - dipping.motion.bars()[0]).abs() < 0.1);
     }
 
     #[test]
     fn test_app_gain_adjustment() {
         let mut app = App {
-            audio_bars: vec![0.4; 32],
+            motion: BarMotion::from_parts(vec![0.4; 32], vec![0.0; 32]),
             ..App::default()
         };
         app.increase_gain();
         assert_eq!(app.gain, 1.1);
         // The gain reaches the bars through the audio processor, not through the app.
-        assert_eq!(app.audio_bars[0], 0.4);
+        assert_eq!(app.motion.bars()[0], 0.4);
     }
 
     #[test]
@@ -1081,11 +1048,11 @@ mod tests {
         let fall_after_one_second = |fps: u32| {
             let mut app = App::new();
             app.fps = fps;
-            app.audio_bars = vec![1.0; 32];
+            app.motion = BarMotion::from_parts(vec![1.0; 32], vec![0.0; 32]);
             for _ in 0..fps {
                 app.tick();
             }
-            app.audio_bars[0]
+            app.motion.bars()[0]
         };
         let at_60 = fall_after_one_second(60);
         for fps in [30, 90, 120] {
