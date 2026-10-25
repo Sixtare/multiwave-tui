@@ -4,6 +4,7 @@ use crate::{
     app::{App, Overlay},
     color_picker::ColorPicker,
     event::{BatchEvent, EventBatch},
+    menu::MenuRow,
 };
 
 /// Actions that require external handling (e.g., audio hardware), performed by `main`.
@@ -147,24 +148,24 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
         KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
         KeyCode::Char('f') | KeyCode::Char('F') => app.change_fps(true),
         KeyCode::Enter => match app.menu_row {
-            0 => app.open_device_popup(),
-            1 => app.open_color_popup(),
-            4 => app.toggle_smoothing(),
-            5 => app.toggle_bar_gap(),
-            6 => app.change_fps(true),
-            _ => {}
+            MenuRow::Device => app.open_device_popup(),
+            MenuRow::Color => app.open_color_popup(),
+            MenuRow::Smoothing => app.toggle_smoothing(),
+            MenuRow::BarGap => app.toggle_bar_gap(),
+            MenuRow::Fps => app.change_fps(true),
+            MenuRow::Sensitivity | MenuRow::Bars => {}
         },
         KeyCode::Left | KeyCode::Right => {
             let forward = key_event.code == KeyCode::Right;
             match (app.menu_row, forward) {
-                (2, true) => app.increase_gain(),
-                (2, false) => app.decrease_gain(),
-                (3, true) => app.increase_bar_count(),
-                (3, false) => app.decrease_bar_count(),
-                (4, _) => app.toggle_smoothing(),
-                (5, _) => app.toggle_bar_gap(),
-                (6, forward) => app.change_fps(forward),
-                _ => {}
+                (MenuRow::Sensitivity, true) => app.increase_gain(),
+                (MenuRow::Sensitivity, false) => app.decrease_gain(),
+                (MenuRow::Bars, true) => app.increase_bar_count(),
+                (MenuRow::Bars, false) => app.decrease_bar_count(),
+                (MenuRow::Smoothing, _) => app.toggle_smoothing(),
+                (MenuRow::BarGap, _) => app.toggle_bar_gap(),
+                (MenuRow::Fps, forward) => app.change_fps(forward),
+                (MenuRow::Device | MenuRow::Color, _) => {}
             }
         }
         _ => {}
@@ -597,7 +598,7 @@ mod tests {
         assert_eq!(app.fps, 90);
 
         press(&mut app, KeyCode::Down);
-        assert_eq!(app.menu_row, 0);
+        assert_eq!(app.menu_row, MenuRow::Device);
     }
 
     #[test]

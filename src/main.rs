@@ -10,6 +10,9 @@ pub mod event;
 /// Settings shared with the running capture.
 pub mod capture_settings;
 
+/// Rows of the main menu.
+pub mod menu;
+
 /// Short on-screen announcements.
 pub mod notices;
 

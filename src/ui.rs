@@ -11,9 +11,10 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, MENU_ROWS, Overlay},
+    app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, Overlay},
     audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
+    menu::MenuRow,
     palette::{BarColor, Palette},
 };
 
@@ -27,7 +28,7 @@ pub struct FrameState {
     /// Displayed bars; left empty while the popup hides the visualizer.
     bars: Vec<f32>,
     overlay: Overlay,
-    menu_row: usize,
+    menu_row: MenuRow,
     devices: Vec<String>,
     selected_device_idx: usize,
     active_device_idx: usize,
@@ -311,7 +312,7 @@ const PICKER_HEIGHT: u16 = SQUARE_ROWS as u16 + 2 + 2;
 /// the key that reaches each one directly, row for row.
 fn render_menu(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    let height = (MENU_ROWS as u16 + 2).min(area.height);
+    let height = (MenuRow::ALL.len() as u16 + 2).min(area.height);
     // The two boxes are centered together on the screen.
     let group_width = (MENU_WIDTH + SHORTCUTS_WIDTH).min(area.width);
     let group = area.centered(Constraint::Length(group_width), Constraint::Length(height));
@@ -332,34 +333,27 @@ fn render_menu(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, menu_area);
     frame.render_widget(block, menu_area);
 
-    let rows = [
-        ("Output device", String::new(), "O"),
-        ("Bar color", app.palette.mode.label().to_string(), "C"),
-        ("Sensitivity", format!("◀ {:.2}x ▶", app.gain), "↑/↓"),
-        ("Bars", format!("◀ {} ▶", app.bar_count), "←/→"),
-        (
-            "Smoothing",
-            format!("◀ {} ▶", if app.smoothing { "on" } else { "off" }),
-            "S",
-        ),
-        (
-            "Bar gap",
-            format!("◀ {} ▶", if app.bar_gap { "on" } else { "off" }),
-            "G",
-        ),
-        ("FPS", format!("◀ {} ▶", app.fps), "F"),
-    ];
-    let lines: Vec<Line> = rows
+    let on_off = |on: bool| format!("◀ {} ▶", if on { "on" } else { "off" });
+    let value = |row: MenuRow| match row {
+        MenuRow::Device => String::new(),
+        MenuRow::Color => app.palette.mode.label().to_string(),
+        MenuRow::Sensitivity => format!("◀ {:.2}x ▶", app.gain),
+        MenuRow::Bars => format!("◀ {} ▶", app.bar_count),
+        MenuRow::Smoothing => on_off(app.smoothing),
+        MenuRow::BarGap => on_off(app.bar_gap),
+        MenuRow::Fps => format!("◀ {} ▶", app.fps),
+    };
+    let lines: Vec<Line> = MenuRow::ALL
         .iter()
-        .enumerate()
-        .map(|(row, (label, value, _))| {
-            let style = if row == app.menu_row {
+        .map(|&row| {
+            let selected = row == app.menu_row;
+            let style = if selected {
                 Style::default().fg(Color::Cyan).bold()
             } else {
                 Style::default().fg(Color::White)
             };
-            let cursor = if row == app.menu_row { ">" } else { " " };
-            Line::styled(format!("{cursor} {label:<14}{value}"), style)
+            let cursor = if selected { ">" } else { " " };
+            Line::styled(format!("{cursor} {:<14}{}", row.label(), value(row)), style)
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
@@ -379,9 +373,9 @@ fn render_menu(frame: &mut Frame, app: &App) {
     let inner = block.inner(shortcuts_area);
     frame.render_widget(Clear, shortcuts_area);
     frame.render_widget(block, shortcuts_area);
-    let lines: Vec<Line> = rows
+    let lines: Vec<Line> = MenuRow::ALL
         .iter()
-        .map(|(_, _, shortcut)| Line::from(*shortcut).centered())
+        .map(|row| Line::from(row.shortcut()).centered())
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
 }

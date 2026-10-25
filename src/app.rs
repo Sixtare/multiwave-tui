@@ -1,5 +1,6 @@
 use crate::{
     color_session::ColorSession,
+    menu::MenuRow,
     notices::{NoticeKind, Notices},
     palette::Palette,
 };
@@ -24,10 +25,6 @@ const PLAIN_DECAY_FACTOR: f32 = 0.20;
 /// The frame rates the user can pick, and the one the animation constants were tuned at.
 pub const FPS_OPTIONS: [u32; 4] = [30, 60, 90, 120];
 pub const DEFAULT_FPS: u32 = 60;
-
-/// Number of rows in the main menu: output device, bar color, sensitivity, bars, smoothing, bar
-/// gap and frame rate.
-pub const MENU_ROWS: usize = 7;
 
 /// The one overlay drawn over the visualizer, which also takes the keys. At most one is open.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -78,8 +75,8 @@ pub struct App {
     pub decay_factor: f32,
     /// The overlay that is open, if any.
     pub overlay: Overlay,
-    /// Highlighted row of the main menu (see [`MENU_ROWS`]).
-    pub menu_row: usize,
+    /// Highlighted row of the main menu.
+    pub menu_row: MenuRow,
     /// Whether the open popup was opened from the main menu, which then comes back when it closes.
     return_to_menu: bool,
     /// List of available audio device names for display in the popup menu.
@@ -116,7 +113,7 @@ impl Default for App {
             attack_factor: 0.40,
             decay_factor: 0.12,
             overlay: Overlay::None,
-            menu_row: 0,
+            menu_row: MenuRow::default(),
             return_to_menu: false,
             devices: Vec::new(),
             selected_device_idx: 0,
@@ -395,7 +392,7 @@ impl App {
     /// Opens the main menu with the cursor on its first row.
     pub fn open_menu(&mut self) {
         self.overlay = Overlay::Menu;
-        self.menu_row = 0;
+        self.menu_row = MenuRow::default();
     }
 
     /// Closes the main menu.
@@ -405,12 +402,12 @@ impl App {
 
     /// Moves the main menu cursor down, wrapping around.
     pub fn select_next_menu_row(&mut self) {
-        self.menu_row = (self.menu_row + 1) % MENU_ROWS;
+        self.menu_row = self.menu_row.next();
     }
 
     /// Moves the main menu cursor up, wrapping around.
     pub fn select_prev_menu_row(&mut self) {
-        self.menu_row = (self.menu_row + MENU_ROWS - 1) % MENU_ROWS;
+        self.menu_row = self.menu_row.previous();
     }
 
     /// Opens the output device popup, remembering whether the main menu was open under it.

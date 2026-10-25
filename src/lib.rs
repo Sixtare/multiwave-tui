@@ -4,6 +4,7 @@ pub mod capture_settings;
 pub mod color_picker;
 pub mod color_session;
 pub mod event;
+pub mod menu;
 pub mod notices;
 pub mod palette;
 pub mod pulse;
