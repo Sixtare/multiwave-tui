@@ -14,6 +14,7 @@ use crate::{
     app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, Overlay},
     audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
+    device_menu::DeviceMenu,
     menu::MenuRow,
     palette::{BarColor, Palette},
 };
@@ -29,10 +30,7 @@ pub struct FrameState {
     bars: Vec<f32>,
     overlay: Overlay,
     menu_row: MenuRow,
-    devices: Vec<String>,
-    selected_device_idx: usize,
-    active_device_idx: usize,
-    device_scroll_offset: usize,
+    devices: DeviceMenu,
     audio_error: Option<String>,
     /// Announcements on screen, top to bottom; none while the device popup is open.
     notices: Vec<String>,
@@ -59,9 +57,6 @@ impl FrameState {
             overlay: app.overlay,
             menu_row: app.menu_row,
             devices: app.devices.clone(),
-            selected_device_idx: app.selected_device_idx,
-            active_device_idx: app.active_device_idx,
-            device_scroll_offset: app.device_scroll_offset,
             audio_error: app.audio_error.clone(),
             notices: if devices_open {
                 Vec::new()
@@ -184,7 +179,7 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
         .border_type(BorderType::Rounded)
         .style(Style::default());
 
-    let items_count = app.devices.len().max(1);
+    let items_count = app.devices.names.len().max(1);
     let desired_height = (items_count as u16 + 4).clamp(6, 18);
     // Keep a small margin around the popup, and never exceed the terminal height.
     let max_height = area.height.saturating_sub(2).max(3).min(area.height);
@@ -196,24 +191,24 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
 
     let list_height = popup_height.saturating_sub(2) as usize;
     if list_height > 0 {
-        app.ensure_device_visible(list_height);
+        app.devices.ensure_visible(list_height);
     }
     let needs_scrollbar =
-        app.devices.len() > list_height && list_height > 0 && centered_area.width > 2;
+        app.devices.names.len() > list_height && list_height > 0 && centered_area.width > 2;
 
     let inner_area = popup_block.inner(centered_area);
     frame.render_widget(popup_block, centered_area);
 
     let mut lines = Vec::new();
-    if app.devices.is_empty() {
+    if app.devices.names.is_empty() {
         lines.push(Line::styled(
             "   No output devices detected.",
             Style::default().fg(Color::DarkGray),
         ));
     } else {
-        for (i, name) in app.devices.iter().enumerate() {
-            let is_selected = i == app.selected_device_idx;
-            let is_active = i == app.active_device_idx;
+        for (i, name) in app.devices.names.iter().enumerate() {
+            let is_selected = i == app.devices.selected;
+            let is_active = i == app.devices.active;
 
             let prefix = if is_selected { " > " } else { "   " };
             let suffix = if is_active { " [Active]" } else { "" };
@@ -233,7 +228,7 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
 
     let paragraph = Paragraph::new(lines)
         .alignment(Alignment::Left)
-        .scroll((app.device_scroll_offset as u16, 0));
+        .scroll((app.devices.scroll_offset() as u16, 0));
 
     let mut content_area = inner_area;
     if needs_scrollbar && content_area.width > 0 {
@@ -250,8 +245,8 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
             width: 1,
             height: inner_area.height,
         };
-        let mut scrollbar_state = ScrollbarState::new(app.devices.len())
-            .position(app.selected_device_idx.min(app.devices.len() - 1))
+        let mut scrollbar_state = ScrollbarState::new(app.devices.names.len())
+            .position(app.devices.selected.min(app.devices.names.len() - 1))
             .viewport_content_length(list_height);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)

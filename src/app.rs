@@ -1,6 +1,7 @@
 use crate::{
     bar_motion::BarMotion,
     color_session::ColorSession,
+    device_menu::DeviceMenu,
     menu::MenuRow,
     notices::{NoticeKind, Notices},
     palette::Palette,
@@ -78,14 +79,8 @@ pub struct App {
     pub menu_row: MenuRow,
     /// Whether the open popup was opened from the main menu, which then comes back when it closes.
     return_to_menu: bool,
-    /// List of available audio device names for display in the popup menu.
-    pub devices: Vec<String>,
-    /// Index of the currently highlighted device in the popup menu.
-    pub selected_device_idx: usize,
-    /// Index of the currently active audio device being captured.
-    pub active_device_idx: usize,
-    /// First device row visible in the popup when the list is scrollable.
-    pub device_scroll_offset: usize,
+    /// The devices listed in the popup, with the cursor, the active one and the scroll position.
+    pub devices: DeviceMenu,
     /// Most recent audio device or stream error, if any.
     pub audio_error: Option<String>,
     /// How the bars are colored. While the color popup is open it holds the live preview.
@@ -113,10 +108,7 @@ impl Default for App {
             overlay: Overlay::None,
             menu_row: MenuRow::default(),
             return_to_menu: false,
-            devices: Vec::new(),
-            selected_device_idx: 0,
-            active_device_idx: 0,
-            device_scroll_offset: 0,
+            devices: DeviceMenu::default(),
             audio_error: None,
             palette: Palette::default(),
             color: ColorSession::default(),
@@ -133,9 +125,7 @@ impl App {
     /// Constructs a new instance of [`App`] with device names and an active index.
     pub fn with_devices(devices: Vec<String>, active_device_idx: usize) -> Self {
         Self {
-            devices,
-            selected_device_idx: active_device_idx,
-            active_device_idx,
+            devices: DeviceMenu::new(devices, active_device_idx),
             ..Self::default()
         }
     }
@@ -235,42 +225,6 @@ impl App {
             self.bar_count = count;
             self.motion.resize(count);
         }
-    }
-
-    /// Moves the popup selection cursor down.
-    pub fn select_next_device(&mut self) {
-        if !self.devices.is_empty() {
-            self.selected_device_idx = (self.selected_device_idx + 1) % self.devices.len();
-        }
-    }
-
-    /// Moves the popup selection cursor up.
-    pub fn select_prev_device(&mut self) {
-        if !self.devices.is_empty() {
-            if self.selected_device_idx == 0 {
-                self.selected_device_idx = self.devices.len() - 1;
-            } else {
-                self.selected_device_idx -= 1;
-            }
-        }
-    }
-
-    /// Scrolls the device popup so the selected row stays within `visible_rows`.
-    pub fn ensure_device_visible(&mut self, visible_rows: usize) {
-        if visible_rows == 0 || self.devices.is_empty() {
-            return;
-        }
-
-        let selected = self.selected_device_idx.min(self.devices.len() - 1);
-        let max_offset = self.devices.len().saturating_sub(visible_rows);
-
-        if selected < self.device_scroll_offset {
-            self.device_scroll_offset = selected;
-        } else if selected >= self.device_scroll_offset.saturating_add(visible_rows) {
-            self.device_scroll_offset = selected + 1 - visible_rows;
-        }
-
-        self.device_scroll_offset = self.device_scroll_offset.min(max_offset);
     }
 
     /// Updates audio bars received from the FFT and applies smoothing.
@@ -988,20 +942,20 @@ mod tests {
         let devices = (0..10).map(|i| format!("Device {i}")).collect();
         let mut app = App::with_devices(devices, 0);
 
-        app.ensure_device_visible(4);
-        assert_eq!(app.device_scroll_offset, 0);
+        app.devices.ensure_visible(4);
+        assert_eq!(app.devices.scroll_offset(), 0);
 
-        app.selected_device_idx = 5;
-        app.ensure_device_visible(4);
-        assert_eq!(app.device_scroll_offset, 2);
+        app.devices.selected = 5;
+        app.devices.ensure_visible(4);
+        assert_eq!(app.devices.scroll_offset(), 2);
 
-        app.selected_device_idx = 0;
-        app.ensure_device_visible(4);
-        assert_eq!(app.device_scroll_offset, 0);
+        app.devices.selected = 0;
+        app.devices.ensure_visible(4);
+        assert_eq!(app.devices.scroll_offset(), 0);
 
-        app.selected_device_idx = 9;
-        app.ensure_device_visible(4);
-        assert_eq!(app.device_scroll_offset, 6);
+        app.devices.selected = 9;
+        app.devices.ensure_visible(4);
+        assert_eq!(app.devices.scroll_offset(), 6);
     }
 
     #[test]
@@ -1012,21 +966,21 @@ mod tests {
             "HDMI Audio".to_string(),
         ];
         let mut app = App::with_devices(devices, 0);
-        assert_eq!(app.selected_device_idx, 0);
+        assert_eq!(app.devices.selected, 0);
 
-        app.select_next_device();
-        assert_eq!(app.selected_device_idx, 1);
+        app.devices.select_next();
+        assert_eq!(app.devices.selected, 1);
 
-        app.select_next_device();
-        assert_eq!(app.selected_device_idx, 2);
+        app.devices.select_next();
+        assert_eq!(app.devices.selected, 2);
 
         // Wrap-around forward
-        app.select_next_device();
-        assert_eq!(app.selected_device_idx, 0);
+        app.devices.select_next();
+        assert_eq!(app.devices.selected, 0);
 
         // Wrap-around backward
-        app.select_prev_device();
-        assert_eq!(app.selected_device_idx, 2);
+        app.devices.select_prev();
+        assert_eq!(app.devices.selected, 2);
     }
 
     #[test]

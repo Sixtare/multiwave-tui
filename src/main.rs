@@ -1,6 +1,9 @@
 /// Application.
 pub mod app;
 
+/// Output devices listed in the device popup.
+pub mod device_menu;
+
 /// Animated bar heights.
 pub mod bar_motion;
 
@@ -58,18 +61,8 @@ use update::{AppAction, apply_batch};
 const OUTPUT_BUFFER_CAPACITY: usize = 256 * 1024;
 
 fn apply_device_update(app: &mut App, update: DeviceListUpdate) {
-    let device_count = update.names.len();
-    app.devices = update.names;
-    app.active_device_idx = if device_count == 0 {
-        0
-    } else {
-        update.active_idx.min(device_count - 1)
-    };
-    app.selected_device_idx = if device_count == 0 {
-        0
-    } else {
-        update.selected_idx.min(device_count - 1)
-    };
+    app.devices
+        .replace(update.names, update.active_idx, update.selected_idx);
 
     if let Some(message) = update.message {
         app.set_audio_error(message);
@@ -132,7 +125,7 @@ fn main() -> Result<()> {
                     if let Some(ref mut dev) = sound_device {
                         match dev.switch_device(new_idx, audio_sender.clone()) {
                             Ok(()) => {
-                                app.active_device_idx = new_idx;
+                                app.devices.active = new_idx;
                                 app.clear_audio_error();
                             }
                             Err(e) => {
@@ -150,7 +143,7 @@ fn main() -> Result<()> {
                 AppAction::RecoverLostDevice => {
                     if let Some(ref mut dev) = sound_device {
                         let update =
-                            dev.recover_from_device_loss(app.selected_device_idx, &audio_sender);
+                            dev.recover_from_device_loss(app.devices.selected, &audio_sender);
                         apply_device_update(&mut app, update);
                     } else {
                         app.set_audio_error("No audio output device available");
@@ -159,7 +152,7 @@ fn main() -> Result<()> {
                 AppAction::PollDevices => {
                     if let Some(ref mut dev) = sound_device
                         && let Some(update) =
-                            dev.poll_device_changes(app.selected_device_idx, &audio_sender)
+                            dev.poll_device_changes(app.devices.selected, &audio_sender)
                     {
                         apply_device_update(&mut app, update);
                     }

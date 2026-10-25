@@ -206,15 +206,15 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
                 app.close_device_popup();
             }
             KeyCode::Up => {
-                app.select_prev_device();
+                app.devices.select_prev();
             }
             KeyCode::Down => {
-                app.select_next_device();
+                app.devices.select_next();
             }
             KeyCode::Enter => {
                 // Active index is updated only after the stream starts successfully.
                 app.close_device_popup();
-                return Some(AppAction::ChangeDevice(app.selected_device_idx));
+                return Some(AppAction::ChangeDevice(app.devices.selected));
             }
             KeyCode::Char('c') | KeyCode::Char('C')
                 if key_event.modifiers == KeyModifiers::CONTROL =>
@@ -633,7 +633,7 @@ mod tests {
     fn test_batch_stops_at_quit() {
         let mut app = App::with_devices(vec!["A".into(), "B".into()], 0);
         app.overlay = Overlay::Devices;
-        app.selected_device_idx = 1;
+        app.devices.selected = 1;
 
         let outcome = apply_batch(
             &mut app,
