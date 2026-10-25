@@ -30,6 +30,8 @@ pub struct FrameState {
     bars: Vec<f32>,
     overlay: Overlay,
     menu_row: MenuRow,
+    /// The active device's name as the menu shows it, which moves with the carousel.
+    menu_device: String,
     devices: DeviceMenu,
     audio_error: Option<String>,
     /// Announcements on screen, top to bottom; none while the device popup is open.
@@ -56,6 +58,11 @@ impl FrameState {
             },
             overlay: app.overlay,
             menu_row: app.menu_row,
+            menu_device: if app.overlay == Overlay::Menu {
+                app.menu_device_text(MENU_WIDTH as usize - 2 - 2 - 14)
+            } else {
+                String::new()
+            },
             devices: app.devices.clone(),
             audio_error: app.audio_error.clone(),
             notices: if devices_open {
@@ -297,8 +304,10 @@ fn render_menu(frame: &mut Frame, app: &App) {
     frame.render_widget(block, menu_area);
 
     let on_off = |on: bool| format!("◀ {} ▶", if on { "on" } else { "off" });
+    // Columns left for a value after the cursor and the label.
+    let value_width = (inner.width as usize).saturating_sub(2 + 14);
     let value = |row: MenuRow| match row {
-        MenuRow::Device => String::new(),
+        MenuRow::Device => app.menu_device_text(value_width),
         MenuRow::Color => app.palette.mode.label().to_string(),
         MenuRow::Sensitivity => format!("◀ {:.2}x ▶", app.gain),
         MenuRow::Bars => format!("◀ {} ▶", app.bar_count),
@@ -316,7 +325,18 @@ fn render_menu(frame: &mut Frame, app: &App) {
                 Style::default().fg(Color::White)
             };
             let cursor = if selected { ">" } else { " " };
-            Line::styled(format!("{cursor} {:<14}{}", row.label(), value(row)), style)
+            let label = format!("{cursor} {:<14}", row.label());
+            // Rows that open a submenu show their value like a selected device in the popup.
+            if selected && matches!(row, MenuRow::Device | MenuRow::Color) {
+                let width = (inner.width as usize).saturating_sub(label.chars().count());
+                let highlight = Style::default().fg(Color::Black).bg(Color::Cyan).bold();
+                Line::from(vec![
+                    Span::styled(label, style),
+                    Span::styled(format!("{:<width$}", value(row)), highlight),
+                ])
+            } else {
+                Line::styled(format!("{label}{}", value(row)), style)
+            }
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);

@@ -67,6 +67,8 @@ pub struct App {
     /// the audio processor's treble power averaging, both stronger the higher the level. 0 is
     /// off, the default.
     pub smoothing_level: u8,
+    /// Last non-zero smoothing level, which the shortcut brings back after switching it off.
+    last_smoothing_level: u8,
     /// Whether a blank column separates neighbouring bars. On by default; off packs the bars
     /// against each other.
     pub bar_gap: bool,
@@ -80,6 +82,9 @@ pub struct App {
     pub overlay: Overlay,
     /// Highlighted row of the main menu.
     pub menu_row: MenuRow,
+    /// Tick at which the menu cursor reached its current row, where the device name carousel
+    /// restarts.
+    menu_row_since: u64,
     /// Whether the open popup was opened from the main menu, which then comes back when it closes.
     return_to_menu: bool,
     /// The devices listed in the popup, with the cursor, the active one and the scroll position.
@@ -104,12 +109,14 @@ impl Default for App {
             motion: BarMotion::new(MIN_BARS),
             gain: 1.0,
             smoothing_level: 0,
+            last_smoothing_level: MAX_SMOOTHING_LEVEL,
             bar_gap: true,
             fps: DEFAULT_FPS,
             attack_factor: 0.40,
             decay_factor: 0.12,
             overlay: Overlay::None,
             menu_row: MenuRow::default(),
+            menu_row_since: 0,
             return_to_menu: false,
             devices: DeviceMenu::default(),
             audio_error: None,
@@ -294,10 +301,10 @@ impl App {
         }
     }
 
-    /// Switches smoothing off, or to its full level when it is off.
+    /// Switches smoothing off, or back to the last level it was on when it is off.
     pub fn toggle_smoothing(&mut self) {
         self.smoothing_level = if self.smoothing_level == 0 {
-            MAX_SMOOTHING_LEVEL
+            self.last_smoothing_level
         } else {
             0
         };
@@ -311,6 +318,9 @@ impl App {
         } else {
             self.smoothing_level.saturating_sub(1)
         };
+        if self.smoothing_level > 0 {
+            self.last_smoothing_level = self.smoothing_level;
+        }
         self.notify(NoticeKind::Smoothing);
     }
 
@@ -359,6 +369,34 @@ impl App {
     pub fn open_menu(&mut self) {
         self.overlay = Overlay::Menu;
         self.menu_row = MenuRow::default();
+        self.menu_row_since = self.tick_counter;
+    }
+
+    /// The active device's name cut to `width` characters for the menu. A longer name scrolls
+    /// like a carousel while the device row is selected, after a short pause on its start, and
+    /// shows its start otherwise.
+    pub fn menu_device_text(&self, width: usize) -> String {
+        let name = self
+            .devices
+            .names
+            .get(self.devices.active)
+            .map_or("", String::as_str);
+        let chars: Vec<char> = name.chars().collect();
+        if chars.len() <= width {
+            return name.to_string();
+        }
+        if self.menu_row != MenuRow::Device {
+            return chars[..width].iter().collect();
+        }
+        // The name loops with a gap between its end and its next start.
+        let cycle: Vec<char> = chars.iter().copied().chain("   ".chars()).collect();
+        let elapsed = self.tick_counter.saturating_sub(self.menu_row_since);
+        let hold = u64::from(self.fps);
+        let ticks_per_step = u64::from((self.fps / 8).max(1));
+        let offset = elapsed.saturating_sub(hold) / ticks_per_step % cycle.len() as u64;
+        (0..width)
+            .map(|i| cycle[(offset as usize + i) % cycle.len()])
+            .collect()
     }
 
     /// Closes the main menu.
@@ -369,11 +407,13 @@ impl App {
     /// Moves the main menu cursor down, wrapping around.
     pub fn select_next_menu_row(&mut self) {
         self.menu_row = self.menu_row.next();
+        self.menu_row_since = self.tick_counter;
     }
 
     /// Moves the main menu cursor up, wrapping around.
     pub fn select_prev_menu_row(&mut self) {
         self.menu_row = self.menu_row.previous();
+        self.menu_row_since = self.tick_counter;
     }
 
     /// Opens the output device popup, remembering whether the main menu was open under it.
@@ -1088,5 +1128,34 @@ mod tests {
             }
             assert!(app.bar_gap_notice().is_none(), "{fps} fps: still shown");
         }
+    }
+
+    #[test]
+    fn test_toggle_smoothing_brings_back_the_last_level() {
+        let mut app = App::default();
+        for _ in 0..4 {
+            app.step_smoothing(true);
+        }
+        assert_eq!(app.smoothing_level, 4);
+        app.toggle_smoothing();
+        assert_eq!(app.smoothing_level, 0);
+        app.toggle_smoothing();
+        assert_eq!(app.smoothing_level, 4);
+    }
+
+    #[test]
+    fn test_menu_device_text_scrolls_only_while_the_row_is_selected() {
+        let mut app = App {
+            devices: DeviceMenu::new(vec!["Short".into(), "A very long device name".into()], 1),
+            ..App::default()
+        };
+        assert_eq!(app.menu_device_text(23), "A very long device name");
+        assert_eq!(app.menu_device_text(10), "A very lon");
+        app.tick_counter = 1000;
+        assert_ne!(app.menu_device_text(10), "A very lon");
+        app.menu_row = MenuRow::Color;
+        assert_eq!(app.menu_device_text(10), "A very lon");
+        app.devices.active = 0;
+        assert_eq!(app.menu_device_text(10), "Short");
     }
 }
