@@ -16,8 +16,8 @@ pub enum AppAction {
     SetBarCount(usize),
     /// Make the running capture apply this manual sensitivity.
     SetGain(f32),
-    /// Make the running capture smooth (or not) the treble bars.
-    SetSmoothing(bool),
+    /// Make the running capture smooth the treble bars with this strength (0.0 is off, 1.0 full).
+    SetSmoothing(f32),
     /// Make the event loop tick (and so draw) this many times per second.
     SetFps(u32),
     /// Rebuild capture after the audio callback reported a lost or invalidated stream.
@@ -50,7 +50,7 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
         .any(|event| matches!(event, BatchEvent::Key(_)));
     let bar_count_before = app.bar_count;
     let gain_before = app.gain;
-    let smoothing_before = app.smoothing;
+    let smoothing_before = app.smoothing_level;
     let fps_before = app.fps;
 
     // Applied first so keys and audio frames in the same batch see the new terminal width.
@@ -88,8 +88,10 @@ pub fn apply_batch(app: &mut App, batch: EventBatch) -> BatchOutcome {
         outcome.actions.push(AppAction::SetGain(app.gain));
     }
 
-    if app.smoothing != smoothing_before {
-        outcome.actions.push(AppAction::SetSmoothing(app.smoothing));
+    if app.smoothing_level != smoothing_before {
+        outcome
+            .actions
+            .push(AppAction::SetSmoothing(app.smoothing_strength()));
     }
 
     if app.fps != fps_before {
@@ -162,7 +164,7 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
                 (MenuRow::Sensitivity, false) => app.decrease_gain(),
                 (MenuRow::Bars, true) => app.increase_bar_count(),
                 (MenuRow::Bars, false) => app.decrease_bar_count(),
-                (MenuRow::Smoothing, _) => app.toggle_smoothing(),
+                (MenuRow::Smoothing, forward) => app.step_smoothing(forward),
                 (MenuRow::BarGap, _) => app.toggle_bar_gap(),
                 (MenuRow::Fps, forward) => app.change_fps(forward),
                 (MenuRow::Device | MenuRow::Color, _) => {}
@@ -346,7 +348,7 @@ mod tests {
         press(&mut app, KeyCode::Char('s'));
         press(&mut app, KeyCode::Char('q'));
         press(&mut app, KeyCode::Char('l'));
-        assert!(!app.smoothing);
+        assert_eq!(app.smoothing_level, 0);
         assert!(!app.should_quit);
         assert_eq!(app.bar_count, 32);
 
@@ -392,7 +394,7 @@ mod tests {
         assert_ne!(fine, after_plain);
         assert!(fine.r.abs_diff(after_plain.r) < after_plain.r.abs_diff(BarColor::CYAN.r));
         assert!(app.overlay == Overlay::Colors);
-        assert!(!app.smoothing);
+        assert_eq!(app.smoothing_level, 0);
 
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.color.picker, None);
@@ -478,22 +480,22 @@ mod tests {
     #[test]
     fn test_s_toggles_smoothing_and_reports_it_once() {
         let mut app = App::default();
-        assert!(!app.smoothing);
+        assert_eq!(app.smoothing_level, 0);
 
         let outcome = apply_batch(&mut app, batch_of(vec![key(KeyCode::Char('s'))]));
-        assert!(app.smoothing);
-        assert_eq!(outcome.actions, vec![AppAction::SetSmoothing(true)]);
+        assert_eq!(app.smoothing_level, crate::app::MAX_SMOOTHING_LEVEL);
+        assert_eq!(outcome.actions, vec![AppAction::SetSmoothing(1.0)]);
 
         let outcome = apply_batch(
             &mut app,
             batch_of(vec![key(KeyCode::Char('s')), key(KeyCode::Char('s'))]),
         );
-        assert!(app.smoothing);
+        assert_eq!(app.smoothing_level, crate::app::MAX_SMOOTHING_LEVEL);
         assert!(outcome.actions.is_empty());
 
         let outcome = apply_batch(&mut app, batch_of(vec![key(KeyCode::Char('s'))]));
-        assert!(!app.smoothing);
-        assert_eq!(outcome.actions, vec![AppAction::SetSmoothing(false)]);
+        assert_eq!(app.smoothing_level, 0);
+        assert_eq!(outcome.actions, vec![AppAction::SetSmoothing(0.0)]);
     }
 
     #[test]
@@ -511,7 +513,7 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
         );
-        assert!(app.overlay == Overlay::Devices && !app.smoothing);
+        assert!(app.overlay == Overlay::Devices && app.smoothing_level == 0);
 
         update(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.overlay != Overlay::Devices && !app.should_quit);
@@ -578,9 +580,17 @@ mod tests {
 
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);
-        assert!(app.smoothing);
+        assert_eq!(app.smoothing_level, crate::app::MAX_SMOOTHING_LEVEL);
         press(&mut app, KeyCode::Char('s'));
-        assert!(!app.smoothing);
+        assert_eq!(app.smoothing_level, 0);
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.smoothing_level, 2);
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.smoothing_level, 1);
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.smoothing_level, 0);
 
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);

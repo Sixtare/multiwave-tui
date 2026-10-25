@@ -3,7 +3,7 @@
 //! The UI thread sets values and the capture callback reads them on every block, so changing a
 //! setting never rebuilds the stream.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use crate::audio_processor::{AudioProcessor, MAX_BAR_COUNT};
 
@@ -13,8 +13,8 @@ pub struct CaptureSettings {
     bar_count: AtomicUsize,
     /// The user's manual sensitivity, as `f32` bits.
     manual_gain_bits: AtomicU32,
-    /// Whether the treble bars are smoothed over time.
-    smoothing: AtomicBool,
+    /// How strongly the treble bars are smoothed over time (0.0 off to 1.0), as `f32` bits.
+    smoothing_bits: AtomicU32,
 }
 
 impl CaptureSettings {
@@ -23,7 +23,7 @@ impl CaptureSettings {
         Self {
             bar_count: AtomicUsize::new(num_bars.clamp(1, MAX_BAR_COUNT)),
             manual_gain_bits: AtomicU32::new(1.0f32.to_bits()),
-            smoothing: AtomicBool::new(false),
+            smoothing_bits: AtomicU32::new(0.0f32.to_bits()),
         }
     }
 
@@ -39,9 +39,11 @@ impl CaptureSettings {
             .store(gain.to_bits(), Ordering::Relaxed);
     }
 
-    /// Turns the treble smoothing of the running capture on or off, effective from the next block.
-    pub fn set_smoothing(&self, on: bool) {
-        self.smoothing.store(on, Ordering::Relaxed);
+    /// Changes the treble smoothing strength of the running capture (0.0 off to 1.0), effective
+    /// from the next block.
+    pub fn set_smoothing(&self, strength: f32) {
+        self.smoothing_bits
+            .store(strength.to_bits(), Ordering::Relaxed);
     }
 
     /// A processor for a stream with `channels` interleaved channels at `sample_rate` Hz,
@@ -63,7 +65,7 @@ impl CaptureSettings {
         processor.set_manual_gain(f32::from_bits(
             self.manual_gain_bits.load(Ordering::Relaxed),
         ));
-        processor.set_smoothing(self.smoothing.load(Ordering::Relaxed));
+        processor.set_smoothing(f32::from_bits(self.smoothing_bits.load(Ordering::Relaxed)));
     }
 }
 
