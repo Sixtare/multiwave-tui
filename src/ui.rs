@@ -219,7 +219,7 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
     }
 
     let popup_block = Block::bordered()
-        .title(" Output Device ")
+        .title(" Audio Output ")
         .title_bottom(Line::from(" ←→ mode  Enter select  Esc close ").centered())
         .title_alignment(Alignment::Center)
         .border_type(BorderType::Rounded)
@@ -247,8 +247,13 @@ fn render_popup(frame: &mut Frame, app: &mut App) {
         Style::default().fg(Color::White)
     };
     let mode_text = format!(
-        "{} {:<9}◀ {} ▶",
-        if app.devices.mode_focused { ">" } else { " " },
+        "{}{:<9}◀ {} ▶",
+        // The same three columns as the device rows, so "Mode" and the names line up.
+        if app.devices.mode_focused {
+            " > "
+        } else {
+            "   "
+        },
         "Mode",
         app.devices.tab.label()
     );
