@@ -14,11 +14,12 @@ pub enum NoticeKind {
     Smoothing,
     BarGap,
     Divider,
+    Mirror,
     Fps,
     Color,
 }
 
-const KINDS: usize = 7;
+const KINDS: usize = 8;
 
 /// When each kind of notice stops being shown.
 #[derive(Debug, Default)]

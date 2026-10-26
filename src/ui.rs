@@ -42,6 +42,8 @@ pub struct FrameState {
     bar_gap: bool,
     /// Whether the line between the bars and their reflection is drawn.
     divider: bool,
+    /// Whether the reflection below the divider line is drawn.
+    mirror: bool,
     palette: Palette,
     /// Manual sensitivity, which sets where the vertical gradient ends.
     gain: f32,
@@ -84,6 +86,7 @@ impl FrameState {
             },
             bar_gap: app.bar_gap,
             divider: app.divider,
+            mirror: app.mirror,
             palette: app.palette,
             gain: app.gain,
             color_row: app.color.row,
@@ -102,8 +105,11 @@ pub fn render(app: &mut App, frame: &mut Frame) {
                 app.motion.bars(),
                 &app.palette,
                 app.gain,
-                app.bar_gap,
-                app.divider,
+                SoundwaveParts {
+                    gap: app.bar_gap,
+                    divider: app.divider,
+                    mirror: app.mirror,
+                },
             );
             if app.overlay == Overlay::Menu {
                 render_menu(frame, app);
@@ -409,6 +415,7 @@ fn render_menu(frame: &mut Frame, app: &App) {
         MenuRow::Smoothing => format!("◀ {} ▶", app.smoothing_text()),
         MenuRow::BarGap => on_off(app.bar_gap),
         MenuRow::Divider => on_off(app.divider),
+        MenuRow::Mirror => on_off(app.mirror),
         MenuRow::Fps => format!("◀ {} ▶", app.fps),
     };
     let lines: Vec<Line> = MenuRow::ALL
@@ -687,6 +694,8 @@ struct Soundwave<'a> {
     gap: bool,
     /// Whether the line between the bars and their reflection is drawn.
     divider: bool,
+    /// Whether the reflection below the divider line is drawn.
+    mirror: bool,
 }
 
 impl Widget for Soundwave<'_> {
@@ -814,7 +823,8 @@ impl Widget for Soundwave<'_> {
             }
 
             // 3. Mirror Effect (upside down, grows down towards screen bottom)
-            for (row, &row_fade) in mirror_fades.iter().enumerate() {
+            let mirror_rows_shown = if self.mirror { mirror_fades.len() } else { 0 };
+            for (row, &row_fade) in mirror_fades.iter().take(mirror_rows_shown).enumerate() {
                 let threshold = row as f32 / mirror_rows as f32;
                 let glyph = bar_glyph(
                     mirror_amplitude,
@@ -836,25 +846,45 @@ impl Widget for Soundwave<'_> {
     }
 }
 
+/// Which parts of the spectrum are drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SoundwaveParts {
+    /// A blank column after each bar.
+    pub gap: bool,
+    /// The line between the bars and their reflection.
+    pub divider: bool,
+    /// The reflection below the divider line.
+    pub mirror: bool,
+}
+
+impl Default for SoundwaveParts {
+    fn default() -> Self {
+        Self {
+            gap: true,
+            divider: true,
+            mirror: true,
+        }
+    }
+}
+
 /// Draws the spectrum. `gain` is the manual sensitivity, which decides how tall a bar has to be
-/// to show the final color of the vertical gradient. `gap` keeps a blank column after each bar and
-/// `divider` draws the line between the bars and their reflection.
+/// to show the final color of the vertical gradient.
 pub fn draw_soundwave(
     frame: &mut Frame,
     area: Rect,
     bars: &[f32],
     palette: &Palette,
     gain: f32,
-    gap: bool,
-    divider: bool,
+    parts: SoundwaveParts,
 ) {
     frame.render_widget(
         Soundwave {
             bars,
             palette,
             peak_height: loudest_bar_height(gain),
-            gap,
-            divider,
+            gap: parts.gap,
+            divider: parts.divider,
+            mirror: parts.mirror,
         },
         area,
     );
@@ -885,7 +915,16 @@ mod tests {
     ) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|frame| draw_soundwave(frame, frame.area(), bars, palette, gain, true, true))
+            .draw(|frame| {
+                draw_soundwave(
+                    frame,
+                    frame.area(),
+                    bars,
+                    palette,
+                    gain,
+                    SoundwaveParts::default(),
+                )
+            })
             .unwrap();
         terminal.backend().buffer().clone()
     }
@@ -902,8 +941,10 @@ mod tests {
                     &bars,
                     &Palette::default(),
                     1.0,
-                    true,
-                    false,
+                    SoundwaveParts {
+                        divider: false,
+                        ..SoundwaveParts::default()
+                    },
                 )
             })
             .unwrap();
@@ -912,6 +953,33 @@ mod tests {
         assert!((0..80).all(|x| buffer[(x, 3)].symbol() == " "));
         // The reflection stays where it was.
         assert_ne!(buffer[(16, 4)].symbol(), " ");
+    }
+
+    #[test]
+    fn test_soundwave_without_mirror_leaves_the_lower_half_empty() {
+        let bars = vec![1.0; 32];
+        let mut terminal = Terminal::new(TestBackend::new(80, 7)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_soundwave(
+                    frame,
+                    frame.area(),
+                    &bars,
+                    &Palette::default(),
+                    1.0,
+                    SoundwaveParts {
+                        mirror: false,
+                        ..SoundwaveParts::default()
+                    },
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        // The bars and the divider stay where they were; everything below is blank.
+        assert_ne!(buffer[(24, 2)].symbol(), " ");
+        assert_eq!(buffer[(24, 3)].symbol(), "─");
+        assert!((4..7).all(|y| (0..80).all(|x| buffer[(x, y)].symbol() == " ")));
     }
 
     #[test]
@@ -927,8 +995,10 @@ mod tests {
                     &bars,
                     &Palette::default(),
                     1.0,
-                    false,
-                    true,
+                    SoundwaveParts {
+                        gap: false,
+                        ..SoundwaveParts::default()
+                    },
                 )
             })
             .unwrap();
