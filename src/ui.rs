@@ -187,7 +187,7 @@ const WAVE_CHARS: &[char] = &[' ', '▂', '▃', '▄', '▅', '▆', '▇', '�
 const INVERTED_WAVE_CHARS: &[char] = &[' ', '▔', '▀', '█'];
 
 /// Rows of devices the popup shows at once, which sets its fixed height.
-const DEVICE_POPUP_ROWS: u16 = 7;
+const DEVICE_POPUP_ROWS: u16 = 9;
 /// The tag after the active row's name.
 const ACTIVE_TAG: &str = " [Active]";
 /// Columns before a row's name: the cursor.
@@ -353,8 +353,9 @@ const MENU_WIDTH: u16 = 34;
 /// Width of the box beside the main menu that lists its shortcuts.
 const SHORTCUTS_WIDTH: u16 = 13;
 const POPUP_WIDTH: u16 = MENU_WIDTH;
-/// Height of the main menu box, which the color popup and the device popup share.
-const MENU_HEIGHT: u16 = MenuRow::ALL.len() as u16 + 2;
+/// Height of the main menu box, which the color popup and the device popup share: tall enough
+/// for the Bar style popup (its rows and borders), which has the most lines.
+const MENU_HEIGHT: u16 = 12;
 /// Width of the color picker box beside the color popup: the square, a gap, the hue strip and
 /// its marker, plus the borders.
 const PICKER_WIDTH: u16 = SQUARE_COLS as u16 + 1 + 2 + 1 + 2;
@@ -403,7 +404,6 @@ fn render_menu(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, menu_area);
     frame.render_widget(block, menu_area);
 
-    let on_off = |on: bool| format!("◀ {} ▶", if on { "on" } else { "off" });
     // Columns left for a value after the cursor and the label.
     let value_width = (inner.width as usize).saturating_sub(2 + 14);
     let value = |row: MenuRow| match row {
@@ -412,8 +412,6 @@ fn render_menu(frame: &mut Frame, app: &App) {
         MenuRow::Sensitivity => format!("◀ {:.2}x ▶", app.gain),
         MenuRow::Bars => format!("◀ {} ▶", app.bar_count),
         MenuRow::Smoothing => format!("◀ {} ▶", app.smoothing_text()),
-        MenuRow::BarGap => on_off(app.bar_gap),
-        MenuRow::Mirror => on_off(app.mirror),
         MenuRow::Fps => format!("◀ {} ▶", app.fps),
     };
     let lines: Vec<Line> = MenuRow::ALL
@@ -521,22 +519,30 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
         })
         .collect();
     lines.insert(Palette::FADE_ROW, Line::default());
-    let render_selected = app.color.row == ColorSession::RENDER_ROW;
-    let render_style = if render_selected {
-        Style::default().fg(Color::Cyan).bold()
-    } else {
-        Style::default().fg(Color::White)
-    };
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        format!(
-            "{} {:<9}◀ {} ▶",
-            if render_selected { ">" } else { " " },
-            "Render",
-            app.render_mode.label()
-        ),
-        render_style,
-    )));
+    let on_off = |on: bool| if on { "on" } else { "off" };
+    let toggles = [
+        (ColorSession::RENDER_ROW, "Render", app.render_mode.label()),
+        (ColorSession::GAP_ROW, "Bar gap", on_off(app.bar_gap)),
+        (ColorSession::MIRROR_ROW, "Mirror", on_off(app.mirror)),
+    ];
+    for (row, label, value) in toggles {
+        let selected = app.color.row == row;
+        let style = if selected {
+            Style::default().fg(Color::Cyan).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(Span::styled(
+            format!(
+                "{} {:<9}◀ {} ▶",
+                if selected { ">" } else { " " },
+                label,
+                value
+            ),
+            style,
+        )));
+    }
     frame.render_widget(Paragraph::new(lines), inner);
 
     if let Some(picker) = &app.color.picker {
@@ -1422,8 +1428,8 @@ mod tests {
         let mut many = App::with_devices((0..20).map(|i| format!("Device {i}")).collect(), 0);
         few.open_device_popup();
         many.open_device_popup();
-        assert_eq!(popup_box(&mut few), (MENU_WIDTH + SHORTCUTS_WIDTH, 10));
-        assert_eq!(popup_box(&mut many), (MENU_WIDTH + SHORTCUTS_WIDTH, 10));
+        assert_eq!(popup_box(&mut few), (MENU_WIDTH + SHORTCUTS_WIDTH, 12));
+        assert_eq!(popup_box(&mut many), (MENU_WIDTH + SHORTCUTS_WIDTH, 12));
 
         let mut app = App::with_devices(vec![long.clone()], 0);
         app.open_device_popup();

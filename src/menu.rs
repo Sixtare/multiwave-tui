@@ -9,21 +9,17 @@ pub enum MenuRow {
     Sensitivity,
     Bars,
     Smoothing,
-    BarGap,
-    Mirror,
     Fps,
 }
 
 impl MenuRow {
     /// Every row, top to bottom.
-    pub const ALL: [MenuRow; 8] = [
+    pub const ALL: [MenuRow; 6] = [
         MenuRow::Device,
         MenuRow::Color,
         MenuRow::Sensitivity,
         MenuRow::Bars,
         MenuRow::Smoothing,
-        MenuRow::BarGap,
-        MenuRow::Mirror,
         MenuRow::Fps,
     ];
 
@@ -51,8 +47,6 @@ impl MenuRow {
             MenuRow::Sensitivity => "Sensitivity",
             MenuRow::Bars => "Bars",
             MenuRow::Smoothing => "Smoothing",
-            MenuRow::BarGap => "Bar gap",
-            MenuRow::Mirror => "Mirror",
             MenuRow::Fps => "FPS",
         }
     }
@@ -65,8 +59,6 @@ impl MenuRow {
             MenuRow::Sensitivity => "↑/↓",
             MenuRow::Bars => "←/→",
             MenuRow::Smoothing => "S",
-            MenuRow::BarGap => "G",
-            MenuRow::Mirror => "M",
             MenuRow::Fps => "F",
         }
     }

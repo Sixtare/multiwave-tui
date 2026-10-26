@@ -153,15 +153,11 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
         KeyCode::Char('o') | KeyCode::Char('O') => app.open_device_popup(),
         KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Char('s') | KeyCode::Char('S') => app.toggle_smoothing(),
-        KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
-        KeyCode::Char('m') | KeyCode::Char('M') => app.toggle_mirror(),
         KeyCode::Char('f') | KeyCode::Char('F') => app.change_fps(true),
         KeyCode::Enter => match app.menu_row {
             MenuRow::Device => app.open_device_popup(),
             MenuRow::Color => app.open_color_popup(),
             MenuRow::Smoothing => app.toggle_smoothing(),
-            MenuRow::BarGap => app.toggle_bar_gap(),
-            MenuRow::Mirror => app.toggle_mirror(),
             MenuRow::Fps => app.change_fps(true),
             MenuRow::Sensitivity | MenuRow::Bars => {}
         },
@@ -173,8 +169,6 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
                 (MenuRow::Bars, true) => app.increase_bar_count(),
                 (MenuRow::Bars, false) => app.decrease_bar_count(),
                 (MenuRow::Smoothing, forward) => app.step_smoothing(forward),
-                (MenuRow::BarGap, _) => app.toggle_bar_gap(),
-                (MenuRow::Mirror, _) => app.toggle_mirror(),
                 (MenuRow::Fps, forward) => app.change_fps(forward),
                 (MenuRow::Device | MenuRow::Color, _) => {}
             }
@@ -201,8 +195,12 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
             _ if app.color.picker.is_some() => update_color_picker(app, key_event),
             KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => app.close_color_popup(),
             KeyCode::Enter => app.color.activate(&mut app.palette),
-            KeyCode::Left | KeyCode::Right if app.color.row == ColorSession::RENDER_ROW => {
-                app.toggle_render_mode()
+            KeyCode::Left | KeyCode::Right if app.color.row >= ColorSession::RENDER_ROW => {
+                match app.color.row {
+                    ColorSession::RENDER_ROW => app.toggle_render_mode(),
+                    ColorSession::GAP_ROW => app.toggle_bar_gap(),
+                    _ => app.toggle_mirror(),
+                }
             }
             KeyCode::Left => app.color.change_option(&mut app.palette, false),
             KeyCode::Right => app.color.change_option(&mut app.palette, true),
@@ -674,14 +672,7 @@ mod tests {
         assert_eq!(app.smoothing_level, 0);
 
         press(&mut app, KeyCode::Down);
-        press(&mut app, KeyCode::Enter);
-        assert!(!app.bar_gap);
-        press(&mut app, KeyCode::Char('g'));
-        assert!(app.bar_gap);
-
-        press(&mut app, KeyCode::Down);
-        assert_eq!(app.menu_row, MenuRow::Mirror);
-        press(&mut app, KeyCode::Down);
+        assert_eq!(app.menu_row, MenuRow::Fps);
         assert_eq!(app.fps, 60);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.fps, 90);
@@ -716,12 +707,6 @@ mod tests {
         assert!(!app.mirror);
         assert_eq!(app.mirror_notice(), Some(false));
 
-        press(&mut app, KeyCode::Esc);
-        app.menu_row = MenuRow::Mirror;
-        press(&mut app, KeyCode::Enter);
-        assert!(app.mirror);
-        press(&mut app, KeyCode::Right);
-        assert!(!app.mirror);
         press(&mut app, KeyCode::Char('M'));
         assert!(app.mirror);
     }
@@ -734,9 +719,13 @@ mod tests {
         assert_eq!(app.render_mode, RenderMode::Canvas);
         assert_eq!(app.render_notice(), Some(RenderMode::Canvas));
 
-        // Up from the mode row wraps to the render row, after the fade row.
+        // The render row comes after the fade row.
         press(&mut app, KeyCode::Char('c'));
-        press(&mut app, KeyCode::Up);
+        // Single color skips the mids and treble rows.
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.color.row, Palette::FADE_ROW);
+        press(&mut app, KeyCode::Down);
         assert_eq!(app.color.row, ColorSession::RENDER_ROW);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.render_mode, RenderMode::Canvas);
@@ -745,14 +734,35 @@ mod tests {
         press(&mut app, KeyCode::Right);
         assert_eq!(app.render_mode, RenderMode::Canvas);
 
-        // Down wraps to the mode row, and Up from the render row lands on the fade row.
-        press(&mut app, KeyCode::Down);
-        assert_eq!(app.color.row, 0);
-        press(&mut app, KeyCode::Up);
+        // Up from the render row lands on the fade row.
         press(&mut app, KeyCode::Up);
         assert_eq!(app.color.row, Palette::FADE_ROW);
         press(&mut app, KeyCode::Down);
         assert_eq!(app.color.row, ColorSession::RENDER_ROW);
+    }
+
+    #[test]
+    fn test_bar_gap_and_mirror_rows_toggle_in_the_bar_style_popup() {
+        let mut app = App::new();
+        press(&mut app, KeyCode::Char('c'));
+        // The last row is the mirror; Down wraps to the mode row.
+        press(&mut app, KeyCode::Up);
+        assert_eq!(app.color.row, ColorSession::MIRROR_ROW);
+        press(&mut app, KeyCode::Right);
+        assert!(!app.mirror);
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.mirror);
+
+        press(&mut app, KeyCode::Up);
+        assert_eq!(app.color.row, ColorSession::GAP_ROW);
+        press(&mut app, KeyCode::Left);
+        assert!(!app.bar_gap);
+        press(&mut app, KeyCode::Right);
+        assert!(app.bar_gap);
+
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.color.row, 0);
     }
 
     #[test]
