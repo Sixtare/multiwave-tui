@@ -26,6 +26,7 @@ pub struct Config {
     /// Level that the smoothing shortcut brings back after switching it off.
     pub last_smoothing_level: u8,
     pub bar_gap: bool,
+    pub divider: bool,
     pub fps: u32,
     pub color_mode: ColorMode,
     /// Bass, mids and treble colors.
@@ -80,13 +81,14 @@ impl Config {
             ColorMode::Rainbow => "rainbow",
         };
         format!(
-            "bars = {}\ngain = {}\nsmoothing = {}\nlast_smoothing = {}\nbar_gap = {}\nfps = {}\n\
+            "bars = {}\ngain = {}\nsmoothing = {}\nlast_smoothing = {}\nbar_gap = {}\ndivider = {}\nfps = {}\n\
              color_mode = {}\ncolor_bass = {}\ncolor_mids = {}\ncolor_treble = {}\nfade = {}\n",
             self.bars,
             self.gain,
             self.smoothing_level,
             self.last_smoothing_level,
             self.bar_gap,
+            self.divider,
             self.fps,
             mode,
             self.bands[0].hex(),
@@ -110,6 +112,7 @@ impl Config {
                 "smoothing" => set(&mut config.smoothing_level, value.parse().ok()),
                 "last_smoothing" => set(&mut config.last_smoothing_level, value.parse().ok()),
                 "bar_gap" => set(&mut config.bar_gap, value.parse().ok()),
+                "divider" => set(&mut config.divider, value.parse().ok()),
                 "fps" => set(&mut config.fps, value.parse().ok()),
                 "color_mode" => set(
                     &mut config.color_mode,
@@ -150,6 +153,7 @@ mod tests {
             smoothing_level: 4,
             last_smoothing_level: 7,
             bar_gap: false,
+            divider: false,
             fps: 90,
             color_mode: ColorMode::Vertical,
             bands: [
