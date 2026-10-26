@@ -690,13 +690,18 @@ impl Widget for Soundwave<'_> {
 
         // Complete symmetrical division: no artificial clamp limits. The bars and the reflection
         // touch at the exact center of the screen and use 100% of the available vertical height.
+        // Without the reflection the bars sit on the bottom edge and use the whole height.
         let usable_lines = area.height as usize;
-        let upper_rows = usable_lines / 2;
-        let mirror_rows = usable_lines / 2;
-        let content_lines = (upper_rows + mirror_rows) as u16;
-        // Vertically centers while filling the entire screen; a spare line goes above.
-        let top = area.y + (area.height - content_lines).div_ceil(2);
-        let base_y = top + upper_rows as u16;
+        let (upper_rows, mirror_rows, base_y) = if self.mirror {
+            let upper_rows = usable_lines / 2;
+            let mirror_rows = usable_lines / 2;
+            let content_lines = (upper_rows + mirror_rows) as u16;
+            // Vertically centers while filling the entire screen; a spare line goes above.
+            let top = area.y + (area.height - content_lines).div_ceil(2);
+            (upper_rows, mirror_rows, top + upper_rows as u16)
+        } else {
+            (usable_lines, 0, area.y + area.height)
+        };
 
         // Each bar is a glyph, followed by a spacer when the gap is on. The row is centered
         // horizontally; when the terminal is narrower than the row, the treble side is clipped.
@@ -796,8 +801,7 @@ impl Widget for Soundwave<'_> {
             }
 
             // 2. Mirror Effect (upside down, grows down towards screen bottom)
-            let mirror_rows_shown = if self.mirror { mirror_fades.len() } else { 0 };
-            for (row, &row_fade) in mirror_fades.iter().take(mirror_rows_shown).enumerate() {
+            for (row, &row_fade) in mirror_fades.iter().enumerate() {
                 let threshold = row as f32 / mirror_rows as f32;
                 let glyph = bar_glyph(
                     mirror_amplitude,
@@ -925,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn test_soundwave_without_mirror_leaves_the_lower_half_empty() {
+    fn test_soundwave_without_mirror_puts_the_bars_on_the_bottom_edge() {
         let bars = vec![1.0; 32];
         let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
         terminal
@@ -945,9 +949,8 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        // The bars stay where they were; everything below is blank.
-        assert_ne!(buffer[(24, 2)].symbol(), " ");
-        assert!((3..6).all(|y| (0..80).all(|x| buffer[(x, y)].symbol() == " ")));
+        // The bars use the whole height from the bottom edge up.
+        assert!((0..6).all(|y| buffer[(24, y)].symbol() != " "));
     }
 
     #[test]
