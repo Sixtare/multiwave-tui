@@ -785,7 +785,7 @@ mod tests {
 
     #[test]
     fn test_bar_count_steps_by_eight_up_to_the_cap() {
-        let mut app = app_with_width(1000);
+        let mut app = app_with_width(1100);
         for expected in [40, 48, 56] {
             app.increase_bar_count();
             assert_eq!(app.bar_count, expected);
