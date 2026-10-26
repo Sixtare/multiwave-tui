@@ -75,6 +75,8 @@ pub struct App {
     pub bar_gap: bool,
     /// Whether the line between the bars and their reflection is drawn. On by default.
     pub divider: bool,
+    /// Whether the reflection below the divider line is drawn. On by default.
+    pub mirror: bool,
     /// Frames (ticks) per second, one of [`FPS_OPTIONS`].
     pub fps: u32,
     /// Attack factor at full smoothing: fast and damped rising response.
@@ -117,6 +119,7 @@ impl Default for App {
             last_smoothing_level: MAX_SMOOTHING_LEVEL,
             bar_gap: true,
             divider: true,
+            mirror: true,
             fps: DEFAULT_FPS,
             attack_factor: 0.40,
             decay_factor: 0.12,
@@ -156,6 +159,7 @@ impl App {
             last_smoothing_level: self.last_smoothing_level,
             bar_gap: self.bar_gap,
             divider: self.divider,
+            mirror: self.mirror,
             fps: self.fps,
             color_mode: self.palette.mode,
             bands: self.palette.bands,
@@ -172,6 +176,7 @@ impl App {
         self.last_smoothing_level = config.last_smoothing_level.clamp(1, MAX_SMOOTHING_LEVEL);
         self.bar_gap = config.bar_gap;
         self.divider = config.divider;
+        self.mirror = config.mirror;
         if FPS_OPTIONS.contains(&config.fps) {
             self.fps = config.fps;
         }
@@ -397,6 +402,18 @@ impl App {
             .then_some(self.divider)
     }
 
+    /// Turns the reflection below the divider line on or off.
+    pub fn toggle_mirror(&mut self) {
+        self.mirror = !self.mirror;
+        self.notify(NoticeKind::Mirror);
+    }
+
+    /// The mirror state to announce on screen right after the user toggled it.
+    pub fn mirror_notice(&self) -> Option<bool> {
+        self.notice_active(NoticeKind::Mirror)
+            .then_some(self.mirror)
+    }
+
     /// Picks the next (or previous) frame rate of [`FPS_OPTIONS`], wrapping around.
     pub fn change_fps(&mut self, forward: bool) {
         let len = FPS_OPTIONS.len();
@@ -536,6 +553,8 @@ impl App {
                 .map(|on| format!(" bar gap {} ", on_off(on))),
             self.divider_notice()
                 .map(|on| format!(" divider {} ", on_off(on))),
+            self.mirror_notice()
+                .map(|on| format!(" mirror {} ", on_off(on))),
             self.fps_notice().map(|fps| format!(" {fps} fps ")),
             self.color_notice().map(|color| format!(" color: {color} ")),
         ]
