@@ -10,21 +10,19 @@ pub enum MenuRow {
     Bars,
     Smoothing,
     BarGap,
-    Divider,
     Mirror,
     Fps,
 }
 
 impl MenuRow {
     /// Every row, top to bottom.
-    pub const ALL: [MenuRow; 9] = [
+    pub const ALL: [MenuRow; 8] = [
         MenuRow::Device,
         MenuRow::Color,
         MenuRow::Sensitivity,
         MenuRow::Bars,
         MenuRow::Smoothing,
         MenuRow::BarGap,
-        MenuRow::Divider,
         MenuRow::Mirror,
         MenuRow::Fps,
     ];
@@ -48,13 +46,12 @@ impl MenuRow {
 
     pub fn label(self) -> &'static str {
         match self {
-            MenuRow::Device => "Output device",
+            MenuRow::Device => "Audio Output",
             MenuRow::Color => "Bar color",
             MenuRow::Sensitivity => "Sensitivity",
             MenuRow::Bars => "Bars",
             MenuRow::Smoothing => "Smoothing",
             MenuRow::BarGap => "Bar gap",
-            MenuRow::Divider => "Divider line",
             MenuRow::Mirror => "Mirror",
             MenuRow::Fps => "FPS",
         }
@@ -69,7 +66,6 @@ impl MenuRow {
             MenuRow::Bars => "←/→",
             MenuRow::Smoothing => "S",
             MenuRow::BarGap => "G",
-            MenuRow::Divider => "L",
             MenuRow::Mirror => "M",
             MenuRow::Fps => "F",
         }

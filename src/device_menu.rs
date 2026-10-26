@@ -42,7 +42,7 @@ impl DeviceTab {
     /// The name the mode row shows.
     pub fn label(self) -> &'static str {
         match self {
-            DeviceTab::Outputs => "Outputs",
+            DeviceTab::Outputs => "Devices",
             DeviceTab::Apps => "Apps",
         }
     }

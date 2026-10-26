@@ -13,7 +13,6 @@ pub enum NoticeKind {
     Gain,
     Smoothing,
     BarGap,
-    Divider,
     Mirror,
     Fps,
     Color,
