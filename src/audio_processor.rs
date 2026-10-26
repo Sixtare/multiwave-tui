@@ -71,14 +71,51 @@ enum Band {
     Treble,
 }
 
-/// How one bar is read from the spectrum.
+/// Top of the band above the crossover where treble bars are also checked against the bass FFT.
+const BASS_BLEND_END_HZ: f32 = 600.0;
+
+/// Where a bar's magnitude is read in one FFT.
 #[derive(Clone, Copy, Debug)]
-struct Bar {
-    band: Band,
+struct BinRead {
     /// Range of FFT bins averaged (together with their peak) into the bar.
     bins: (usize, usize),
     /// For bars narrower than one bin: the lower bin and the fraction towards the next one.
     interpolation: Option<(usize, f32)>,
+}
+
+impl BinRead {
+    fn read(&self, magnitudes: &[f32]) -> f32 {
+        if let Some((lower, fraction)) = self.interpolation {
+            magnitudes[lower] * (1.0 - fraction) + magnitudes[lower + 1] * fraction
+        } else {
+            let slice = &magnitudes[self.bins.0..self.bins.1.min(magnitudes.len())];
+            let average = slice.iter().sum::<f32>() / slice.len() as f32;
+            let max = slice.iter().cloned().fold(0.0, f32::max);
+            // Mixes the average with the band's peak to bring out transients and cymbals
+            0.5 * average + 0.5 * max
+        }
+    }
+}
+
+/// A treble bar just above the crossover, also read from the bass FFT. The short FFT cannot
+/// resolve below a few hundred Hz (its Hann main lobe is about 190 Hz wide), so a bass note
+/// leaks into the first treble bars as a shoulder far above the bass bars next to it.
+#[derive(Clone, Copy, Debug)]
+struct BassLimit {
+    read: BinRead,
+    /// Converts the bass reading to the treble reading's noise convention (their bar widths
+    /// in bins differ, so the average-plus-peak rule overstates noise differently).
+    scale: f32,
+    /// 1.0 at the crossover, falling linearly per octave to 0.0 at [`BASS_BLEND_END_HZ`].
+    weight: f32,
+}
+
+/// How one bar is read from the spectrum.
+#[derive(Clone, Copy, Debug)]
+struct Bar {
+    band: Band,
+    read: BinRead,
+    limit: Option<BassLimit>,
     /// Linear gain of the frequency tilt at the bar's center frequency.
     tilt: f32,
     /// Linear gain (at most 1.0) that cancels how much the average-plus-peak rule overstates
@@ -116,6 +153,40 @@ fn noise_bias(bins: usize) -> f32 {
     0.5 + 0.5 * expected_max / mean
 }
 
+impl BinRead {
+    /// Where the bar spanning `f_start..f_end` Hz (centered at `center`) sits in an FFT of
+    /// `fft_size` samples.
+    fn new(fft_size: usize, sample_rate: f32, f_start: f32, f_end: f32, center: f32) -> Self {
+        let total_bins = fft_size / 2;
+        let bins_per_hz = fft_size as f32 / sample_rate;
+
+        let bin_start = ((f_start * bins_per_hz).round() as usize).clamp(1, total_bins - 1);
+        let bin_end = ((f_end * bins_per_hz).round() as usize).clamp(bin_start + 1, total_bins);
+
+        // A bar narrower than one FFT bin would repeat its neighbours' value as a plateau.
+        // Read it at its center frequency, interpolating between the two surrounding bins.
+        let interpolation = ((f_end - f_start) * bins_per_hz < 1.0).then(|| {
+            let position = center * bins_per_hz;
+            let lower = (position.floor() as usize).clamp(1, total_bins - 1);
+            (lower, (position - lower as f32).clamp(0.0, 1.0))
+        });
+        Self {
+            bins: (bin_start, bin_end),
+            interpolation,
+        }
+    }
+
+    /// How much the average-plus-peak rule overstates noise in this bar. An interpolated bar
+    /// reads a single value, which has no peak to overstate.
+    fn noise_bias(&self) -> f32 {
+        if self.interpolation.is_some() {
+            1.0
+        } else {
+            noise_bias(self.bins.1 - self.bins.0)
+        }
+    }
+}
+
 /// Per-bar layout derived from the bar count and the stream's sample rate.
 #[derive(Debug)]
 struct BandLayout {
@@ -138,33 +209,25 @@ impl BandLayout {
                 } else {
                     (Band::Treble, FFT_SIZE)
                 };
-                let total_bins = fft_size / 2;
-                let bins_per_hz = fft_size as f32 / sample_rate;
-
-                let bin_start = ((f_start * bins_per_hz).round() as usize).clamp(1, total_bins - 1);
-                let bin_end =
-                    ((f_end * bins_per_hz).round() as usize).clamp(bin_start + 1, total_bins);
-
-                // A bar narrower than one FFT bin would repeat its neighbours' value as a
-                // plateau. Read it at its center frequency, interpolating between the two
-                // surrounding bins.
-                let interpolation = ((f_end - f_start) * bins_per_hz < 1.0).then(|| {
-                    let position = center * bins_per_hz;
-                    let lower = (position.floor() as usize).clamp(1, total_bins - 1);
-                    (lower, (position - lower as f32).clamp(0.0, 1.0))
-                });
+                let read = BinRead::new(fft_size, sample_rate, f_start, f_end, center);
 
                 let tilt_db = slope * (center / TILT_PIVOT_HZ).log2();
-                // An interpolated bar reads a single value, which has no peak to overstate.
-                let bias = if interpolation.is_some() {
-                    1.0
-                } else {
-                    noise_bias(bin_end - bin_start)
-                };
+                let bias = read.noise_bias();
+
+                let limit = (band == Band::Treble && center < BASS_BLEND_END_HZ).then(|| {
+                    let read = BinRead::new(BASS_FFT_SIZE, sample_rate, f_start, f_end, center);
+                    let octaves = (BASS_BLEND_END_HZ / BASS_CROSSOVER_HZ).log2();
+                    BassLimit {
+                        read,
+                        scale: bias / read.noise_bias(),
+                        weight: (1.0 - (center / BASS_CROSSOVER_HZ).log2() / octaves)
+                            .clamp(0.0, 1.0),
+                    }
+                });
                 Bar {
                     band,
-                    bins: (bin_start, bin_end),
-                    interpolation,
+                    read,
+                    limit,
                     tilt: 10f32.powf(tilt_db / 20.0),
                     bias_correction: 1.0 / bias,
                 }
@@ -402,15 +465,11 @@ impl AudioProcessor {
                 Band::Treble => &self.treble.magnitudes,
             };
 
-            let magnitude = if let Some((lower, fraction)) = bar.interpolation {
-                magnitudes[lower] * (1.0 - fraction) + magnitudes[lower + 1] * fraction
-            } else {
-                let slice = &magnitudes[bar.bins.0..bar.bins.1.min(magnitudes.len())];
-                let average = slice.iter().sum::<f32>() / slice.len() as f32;
-                let max = slice.iter().cloned().fold(0.0, f32::max);
-                // Mixes the average with the band's peak to bring out transients and cymbals
-                0.5 * average + 0.5 * max
-            };
+            let mut magnitude = bar.read.read(magnitudes);
+            if let Some(limit) = &bar.limit {
+                let bass = limit.read.read(&self.bass.magnitudes) * limit.scale;
+                magnitude += (magnitude.min(bass) - magnitude) * limit.weight;
+            }
 
             let magnitude = match bar.band {
                 Band::Bass => magnitude,
@@ -685,17 +744,52 @@ mod tests {
         let bars = &processor.layout.bars;
 
         // Even with the long bass FFT, the lowest of 256 bars is narrower than a bin.
-        assert!(bars[0].interpolation.is_some());
-        assert!(bars[255].interpolation.is_none());
+        assert!(bars[0].read.interpolation.is_some());
+        assert!(bars[255].read.interpolation.is_none());
 
         let positions: Vec<f32> = bars
             .iter()
             .filter(|bar| bar.band == Band::Bass)
-            .filter_map(|bar| bar.interpolation)
+            .filter_map(|bar| bar.read.interpolation)
             .map(|(lower, fraction)| lower as f32 + fraction)
             .collect();
         assert!(positions.windows(2).all(|pair| pair[1] >= pair[0]));
         assert!(positions.last().unwrap() > positions.first().unwrap());
+    }
+
+    #[test]
+    fn test_a_bass_note_does_not_leave_a_shoulder_above_the_crossover() {
+        // The short FFT's wide Hann main lobe used to lift the first treble bars about 28 dB
+        // above the bass bars right below them for a 100 Hz tone.
+        let mut processor = processor_without_agc(256, 0.0);
+        let levels = mean_levels_db(&mut processor, &sine(100.0, 0.5, 48_000));
+        let crossover = processor
+            .layout
+            .bars
+            .iter()
+            .filter(|bar| bar.band == Band::Bass)
+            .count();
+        let last_bass = levels[crossover - 1];
+        let first_treble = levels[crossover];
+        assert!(
+            first_treble < last_bass + 3.0,
+            "bass {last_bass:.1} dB, treble {first_treble:.1} dB"
+        );
+    }
+
+    #[test]
+    fn test_noise_stays_continuous_across_the_blend_zone() {
+        let mut processor = processor_without_agc(256, 0.0);
+        let levels = mean_levels_db(&mut processor, &pink_noise(48_000 * 4, 0.1));
+        let crossover = processor
+            .layout
+            .bars
+            .iter()
+            .filter(|bar| bar.band == Band::Bass)
+            .count();
+        let below: f32 = levels[crossover - 10..crossover].iter().sum::<f32>() / 10.0;
+        let above: f32 = levels[crossover + 10..crossover + 20].iter().sum::<f32>() / 10.0;
+        assert!((below - above).abs() < 3.0, "{below:.1} vs {above:.1} dB");
     }
 
     #[test]
@@ -739,7 +833,7 @@ mod tests {
                 .layout
                 .bars
                 .iter()
-                .map(|bar| bar.bins)
+                .map(|bar| bar.read.bins)
                 .collect::<Vec<_>>()
         };
         assert_ne!(ranges(&at_44k), ranges(&at_48k));
