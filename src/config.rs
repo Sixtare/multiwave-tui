@@ -10,7 +10,7 @@ use std::{
 
 use crate::palette::{BarColor, ColorMode};
 
-/// Name of the directory holding the file, under `~/.local` on Linux and `%APPDATA%` on Windows.
+/// Name of the directory holding the file, under `~/.local/share` on Linux and `%APPDATA%` on Windows.
 const DIR_NAME: &str = "visualizer";
 /// Name of the file inside that directory.
 const FILE_NAME: &str = "config";
@@ -41,13 +41,13 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Where the file lives: `~/.local/visualizer/config` on Linux, `%APPDATA%\visualizer\config`
+    /// Where the file lives: `~/.local/share/visualizer/config` on Linux, `%APPDATA%\visualizer\config`
     /// on Windows. `None` when the home directory is unknown.
     pub fn path() -> Option<PathBuf> {
         let base = if cfg!(windows) {
             PathBuf::from(std::env::var_os("APPDATA")?)
         } else {
-            PathBuf::from(std::env::var_os("HOME")?).join(".local")
+            PathBuf::from(std::env::var_os("HOME")?).join(".local/share")
         };
         Some(base.join(DIR_NAME).join(FILE_NAME))
     }
