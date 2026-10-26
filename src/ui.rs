@@ -353,6 +353,8 @@ const MENU_WIDTH: u16 = 34;
 /// Width of the box beside the main menu that lists its shortcuts.
 const SHORTCUTS_WIDTH: u16 = 13;
 const POPUP_WIDTH: u16 = MENU_WIDTH;
+/// Index of the menu row that a blank line follows (Bar style).
+const MENU_GAP_AFTER: usize = 1;
 /// Height of the main menu box, which the color popup and the device popup share: tall enough
 /// for the Bar style popup (its rows and borders), which has the most lines.
 const MENU_HEIGHT: u16 = 12;
@@ -414,7 +416,7 @@ fn render_menu(frame: &mut Frame, app: &App) {
         MenuRow::Smoothing => format!("◀ {} ▶", app.smoothing_text()),
         MenuRow::Fps => format!("◀ {} ▶", app.fps),
     };
-    let lines: Vec<Line> = MenuRow::ALL
+    let mut lines: Vec<Line> = MenuRow::ALL
         .iter()
         .map(|&row| {
             let selected = row == app.menu_row;
@@ -438,6 +440,8 @@ fn render_menu(frame: &mut Frame, app: &App) {
             }
         })
         .collect();
+    // A blank line sets the Bar style row apart from the options below it.
+    lines.insert(MENU_GAP_AFTER + 1, Line::default());
     frame.render_widget(Paragraph::new(lines), inner);
 
     if shortcuts_area.width < 3 {
@@ -450,10 +454,11 @@ fn render_menu(frame: &mut Frame, app: &App) {
     let inner = block.inner(shortcuts_area);
     frame.render_widget(Clear, shortcuts_area);
     frame.render_widget(block, shortcuts_area);
-    let lines: Vec<Line> = MenuRow::ALL
+    let mut lines: Vec<Line> = MenuRow::ALL
         .iter()
         .map(|row| Line::from(row.shortcut()).centered())
         .collect();
+    lines.insert(MENU_GAP_AFTER + 1, Line::default());
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -1179,6 +1184,26 @@ mod tests {
             FrameState::capture(&app, SIZE),
             FrameState::capture(&App::new(), SIZE)
         );
+    }
+
+    #[test]
+    fn test_menu_leaves_a_blank_line_after_bar_style() {
+        let mut app = App::new();
+        app.open_menu();
+        let mut terminal = Terminal::new(TestBackend::new(60, 14)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let row_text = |y: u16| -> String {
+            (0..60)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect()
+        };
+        let find = |needle: &str| (0..14).find(|&y| row_text(y).contains(needle)).unwrap();
+        let style = find("Bar style");
+        assert_eq!(find("Sensitivity"), style + 2);
+        // The shortcuts box keeps the same rows: C beside Bar style, ↑/↓ beside Sensitivity.
+        assert!(row_text(style).contains(" C "));
+        assert!(row_text(style + 2).contains("↑/↓"));
     }
 
     #[test]
