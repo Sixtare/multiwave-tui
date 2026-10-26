@@ -153,12 +153,14 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
         KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Char('s') | KeyCode::Char('S') => app.toggle_smoothing(),
         KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
+        KeyCode::Char('l') | KeyCode::Char('L') => app.toggle_divider(),
         KeyCode::Char('f') | KeyCode::Char('F') => app.change_fps(true),
         KeyCode::Enter => match app.menu_row {
             MenuRow::Device => app.open_device_popup(),
             MenuRow::Color => app.open_color_popup(),
             MenuRow::Smoothing => app.toggle_smoothing(),
             MenuRow::BarGap => app.toggle_bar_gap(),
+            MenuRow::Divider => app.toggle_divider(),
             MenuRow::Fps => app.change_fps(true),
             MenuRow::Sensitivity | MenuRow::Bars => {}
         },
@@ -171,6 +173,7 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
                 (MenuRow::Bars, false) => app.decrease_bar_count(),
                 (MenuRow::Smoothing, forward) => app.step_smoothing(forward),
                 (MenuRow::BarGap, _) => app.toggle_bar_gap(),
+                (MenuRow::Divider, _) => app.toggle_divider(),
                 (MenuRow::Fps, forward) => app.change_fps(forward),
                 (MenuRow::Device | MenuRow::Color, _) => {}
             }
@@ -261,6 +264,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('o') | KeyCode::Char('O') => app.open_device_popup(),
         KeyCode::Char('s') => app.toggle_smoothing(),
         KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
+        KeyCode::Char('l') | KeyCode::Char('L') => app.toggle_divider(),
         KeyCode::Char('f') | KeyCode::Char('F') => app.change_fps(true),
         KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Right => app.increase_bar_count(),
@@ -654,6 +658,8 @@ mod tests {
         assert!(app.bar_gap);
 
         press(&mut app, KeyCode::Down);
+        assert_eq!(app.menu_row, MenuRow::Divider);
+        press(&mut app, KeyCode::Down);
         assert_eq!(app.fps, 60);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.fps, 90);
@@ -678,6 +684,24 @@ mod tests {
         }
         assert_eq!(seen, [90, 120, 30, 60, 90]);
         assert_eq!(app.fps_notice(), Some(90));
+    }
+
+    #[test]
+    fn test_l_toggles_the_divider_line_from_the_visualizer_and_the_menu() {
+        let mut app = App::new();
+        assert!(app.divider);
+        press(&mut app, KeyCode::Char('l'));
+        assert!(!app.divider);
+        assert_eq!(app.divider_notice(), Some(false));
+
+        press(&mut app, KeyCode::Esc);
+        app.menu_row = MenuRow::Divider;
+        press(&mut app, KeyCode::Enter);
+        assert!(app.divider);
+        press(&mut app, KeyCode::Left);
+        assert!(!app.divider);
+        press(&mut app, KeyCode::Char('L'));
+        assert!(app.divider);
     }
 
     #[test]

@@ -40,6 +40,8 @@ pub struct FrameState {
     notices: Vec<String>,
     /// Whether a blank column separates the bars.
     bar_gap: bool,
+    /// Whether the line between the bars and their reflection is drawn.
+    divider: bool,
     palette: Palette,
     /// Manual sensitivity, which sets where the vertical gradient ends.
     gain: f32,
@@ -81,6 +83,7 @@ impl FrameState {
                 app.visible_notices()
             },
             bar_gap: app.bar_gap,
+            divider: app.divider,
             palette: app.palette,
             gain: app.gain,
             color_row: app.color.row,
@@ -100,6 +103,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
                 &app.palette,
                 app.gain,
                 app.bar_gap,
+                app.divider,
             );
             if app.overlay == Overlay::Menu {
                 render_menu(frame, app);
@@ -404,6 +408,7 @@ fn render_menu(frame: &mut Frame, app: &App) {
         MenuRow::Bars => format!("◀ {} ▶", app.bar_count),
         MenuRow::Smoothing => format!("◀ {} ▶", app.smoothing_text()),
         MenuRow::BarGap => on_off(app.bar_gap),
+        MenuRow::Divider => on_off(app.divider),
         MenuRow::Fps => format!("◀ {} ▶", app.fps),
     };
     let lines: Vec<Line> = MenuRow::ALL
@@ -680,6 +685,8 @@ struct Soundwave<'a> {
     peak_height: f32,
     /// Whether a blank column follows each bar's glyph.
     gap: bool,
+    /// Whether the line between the bars and their reflection is drawn.
+    divider: bool,
 }
 
 impl Widget for Soundwave<'_> {
@@ -799,9 +806,11 @@ impl Widget for Soundwave<'_> {
             }
 
             // 2. Subtle center divider line (mirror horizon at screen center)
-            set_cell(column, divider_y, '─', Color::DarkGray);
-            if self.gap {
-                set_cell(column + 1, divider_y, '─', Color::DarkGray);
+            if self.divider {
+                set_cell(column, divider_y, '─', Color::DarkGray);
+                if self.gap {
+                    set_cell(column + 1, divider_y, '─', Color::DarkGray);
+                }
             }
 
             // 3. Mirror Effect (upside down, grows down towards screen bottom)
@@ -828,7 +837,8 @@ impl Widget for Soundwave<'_> {
 }
 
 /// Draws the spectrum. `gain` is the manual sensitivity, which decides how tall a bar has to be
-/// to show the final color of the vertical gradient. `gap` keeps a blank column after each bar.
+/// to show the final color of the vertical gradient. `gap` keeps a blank column after each bar and
+/// `divider` draws the line between the bars and their reflection.
 pub fn draw_soundwave(
     frame: &mut Frame,
     area: Rect,
@@ -836,6 +846,7 @@ pub fn draw_soundwave(
     palette: &Palette,
     gain: f32,
     gap: bool,
+    divider: bool,
 ) {
     frame.render_widget(
         Soundwave {
@@ -843,6 +854,7 @@ pub fn draw_soundwave(
             palette,
             peak_height: loudest_bar_height(gain),
             gap,
+            divider,
         },
         area,
     );
@@ -873,9 +885,33 @@ mod tests {
     ) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|frame| draw_soundwave(frame, frame.area(), bars, palette, gain, true))
+            .draw(|frame| draw_soundwave(frame, frame.area(), bars, palette, gain, true, true))
             .unwrap();
         terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn test_soundwave_without_divider_leaves_its_row_empty() {
+        let bars = vec![1.0; 32];
+        let mut terminal = Terminal::new(TestBackend::new(80, 7)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_soundwave(
+                    frame,
+                    frame.area(),
+                    &bars,
+                    &Palette::default(),
+                    1.0,
+                    true,
+                    false,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert!((0..80).all(|x| buffer[(x, 3)].symbol() == " "));
+        // The reflection stays where it was.
+        assert_ne!(buffer[(16, 4)].symbol(), " ");
     }
 
     #[test]
@@ -885,7 +921,15 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 7)).unwrap();
         terminal
             .draw(|frame| {
-                draw_soundwave(frame, frame.area(), &bars, &Palette::default(), 1.0, false)
+                draw_soundwave(
+                    frame,
+                    frame.area(),
+                    &bars,
+                    &Palette::default(),
+                    1.0,
+                    false,
+                    true,
+                )
             })
             .unwrap();
         let buffer = terminal.backend().buffer();

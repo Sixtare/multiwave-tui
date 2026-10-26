@@ -73,6 +73,8 @@ pub struct App {
     /// Whether a blank column separates neighbouring bars. On by default; off packs the bars
     /// against each other.
     pub bar_gap: bool,
+    /// Whether the line between the bars and their reflection is drawn. On by default.
+    pub divider: bool,
     /// Frames (ticks) per second, one of [`FPS_OPTIONS`].
     pub fps: u32,
     /// Attack factor at full smoothing: fast and damped rising response.
@@ -114,6 +116,7 @@ impl Default for App {
             smoothing_level: 0,
             last_smoothing_level: MAX_SMOOTHING_LEVEL,
             bar_gap: true,
+            divider: true,
             fps: DEFAULT_FPS,
             attack_factor: 0.40,
             decay_factor: 0.12,
@@ -152,6 +155,7 @@ impl App {
             smoothing_level: self.smoothing_level,
             last_smoothing_level: self.last_smoothing_level,
             bar_gap: self.bar_gap,
+            divider: self.divider,
             fps: self.fps,
             color_mode: self.palette.mode,
             bands: self.palette.bands,
@@ -167,6 +171,7 @@ impl App {
         self.smoothing_level = config.smoothing_level.min(MAX_SMOOTHING_LEVEL);
         self.last_smoothing_level = config.last_smoothing_level.clamp(1, MAX_SMOOTHING_LEVEL);
         self.bar_gap = config.bar_gap;
+        self.divider = config.divider;
         if FPS_OPTIONS.contains(&config.fps) {
             self.fps = config.fps;
         }
@@ -380,6 +385,18 @@ impl App {
             .then_some(self.bar_gap)
     }
 
+    /// Turns the line between the bars and their reflection on or off.
+    pub fn toggle_divider(&mut self) {
+        self.divider = !self.divider;
+        self.notify(NoticeKind::Divider);
+    }
+
+    /// The divider state to announce on screen right after the user toggled it.
+    pub fn divider_notice(&self) -> Option<bool> {
+        self.notice_active(NoticeKind::Divider)
+            .then_some(self.divider)
+    }
+
     /// Picks the next (or previous) frame rate of [`FPS_OPTIONS`], wrapping around.
     pub fn change_fps(&mut self, forward: bool) {
         let len = FPS_OPTIONS.len();
@@ -517,6 +534,8 @@ impl App {
                 .map(|level| format!(" smoothing {level} ")),
             self.bar_gap_notice()
                 .map(|on| format!(" bar gap {} ", on_off(on))),
+            self.divider_notice()
+                .map(|on| format!(" divider {} ", on_off(on))),
             self.fps_notice().map(|fps| format!(" {fps} fps ")),
             self.color_notice().map(|color| format!(" color: {color} ")),
         ]
