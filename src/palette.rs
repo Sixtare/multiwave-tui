@@ -253,7 +253,7 @@ impl Palette {
     /// The fade level as shown: `Off`, then `0.1` to `1.0`.
     pub fn fade_level_text(&self) -> String {
         if self.fade_level == 0 {
-            "Off".to_string()
+            "off".to_string()
         } else {
             format!("{:.1}", self.fade_level as f32 / 10.0)
         }
@@ -590,7 +590,7 @@ mod tests {
         for _ in 0..20 {
             palette.step_fade_level(false);
         }
-        assert_eq!(palette.fade_level_text(), "Off");
+        assert_eq!(palette.fade_level_text(), "off");
         assert_eq!(palette.fade_floor(), 1.0);
         palette.step_fade_level(true);
         assert_eq!(palette.fade_level_text(), "0.1");

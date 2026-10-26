@@ -768,7 +768,7 @@ mod tests {
             app.color.change_option(&mut app.palette, false);
         }
         assert_eq!(app.palette.fade_level, 0);
-        assert_eq!(app.palette.fade_level_text(), "Off");
+        assert_eq!(app.palette.fade_level_text(), "off");
         assert_eq!(app.color.picker, None);
         // The row stays selectable while the fade is off.
         app.color.select_next(&app.palette);
