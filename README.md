@@ -46,7 +46,7 @@ It needs a real interactive terminal. If audio capture is unavailable, the app s
 
 Options are stored in a plain `key = value` text file:
 
-- Linux: `~/.local/share/multiwave-tui/config`
+- Linux: `~/.config/multiwave-tui/config`
 - Windows: `%USERPROFILE%\Documents\multiwave-tui\config`
 
 Missing or invalid lines fall back to the defaults.

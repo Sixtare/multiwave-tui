@@ -13,7 +13,7 @@ use crate::{
     render_mode::RenderMode,
 };
 
-/// Name of the directory holding the file, under `~/.local/share` on Linux and `Documents` on Windows.
+/// Name of the directory holding the file, under `~/.config` on Linux and `Documents` on Windows.
 const DIR_NAME: &str = "multiwave-tui";
 /// Name of the file inside that directory.
 const FILE_NAME: &str = "config";
@@ -45,13 +45,13 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Where the file lives: `~/.local/share/multiwave-tui/config` on Linux, `Documents\multiwave-tui\config`
+    /// Where the file lives: `~/.config/multiwave-tui/config` on Linux, `Documents\multiwave-tui\config`
     /// on Windows. `None` when the home directory is unknown.
     pub fn path() -> Option<PathBuf> {
         let base = if cfg!(windows) {
             PathBuf::from(std::env::var_os("USERPROFILE")?).join("Documents")
         } else {
-            PathBuf::from(std::env::var_os("HOME")?).join(".local/share")
+            PathBuf::from(std::env::var_os("HOME")?).join(".config")
         };
         Some(base.join(DIR_NAME).join(FILE_NAME))
     }
