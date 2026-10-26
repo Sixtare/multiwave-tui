@@ -12,7 +12,7 @@ use crate::{
 /// Fewest bars the visualizer shows, even on a terminal too narrow to fit them.
 pub const MIN_BARS: usize = 32;
 /// Most bars the visualizer shows, however wide the terminal is.
-pub const MAX_BARS: usize = 256;
+pub const MAX_BARS: usize = 512;
 /// Bars added or removed by each key press.
 pub const BAR_STEP: usize = 8;
 /// Terminal columns used by one bar with the gap on: its glyph plus a spacer.
@@ -785,7 +785,7 @@ mod tests {
 
     #[test]
     fn test_bar_count_steps_by_eight_up_to_the_cap() {
-        let mut app = app_with_width(1000);
+        let mut app = app_with_width(1100);
         for expected in [40, 48, 56] {
             app.increase_bar_count();
             assert_eq!(app.bar_count, expected);
