@@ -11,15 +11,14 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, Overlay},
+    app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, Overlay},
     audio_processor::loudest_bar_height,
-    bar_layout::{BarSlot, CellHalf, layout, row_width},
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
     color_session::ColorSession,
     device_menu::{DeviceMenu, DeviceTab},
     menu::MenuRow,
     palette::{BarColor, Palette},
-    render_mode::{RenderMode, braille_glyph, braille_mask, cell_dots},
+    render_mode::{RenderMode, braille_glyph, cell_dots},
 };
 
 /// Everything [`render`] reads from the app, plus the terminal size.
@@ -773,30 +772,21 @@ impl Widget for Soundwave<'_> {
             (usable_lines, 0, area.y + area.height)
         };
 
-        // The bars are laid out by `bar_layout`: the gap and then the bar width give way as the
-        // count nears what the width holds. The row is centered horizontally; when the terminal
-        // is narrower than the row, the treble side is clipped.
+        // Each bar is a glyph, followed by a spacer when the gap is on. The row is centered
+        // horizontally; when the terminal is narrower than the row, the treble side is clipped.
         let bar_count = self.bars.len();
-        let canvas = self.render_mode == RenderMode::Canvas;
-        let slots = layout(bar_count, area.width as usize, self.gap, canvas);
-        let visible_width = row_width(&slots).min(area.width as usize);
+        let columns_per_bar = if self.gap {
+            COLUMNS_PER_BAR
+        } else {
+            COLUMNS_PER_BAR_TIGHT
+        };
+        let row_width = bar_count * columns_per_bar;
+        let visible_width = row_width.min(area.width as usize);
         let left = area.x + (area.width - visible_width as u16) / 2;
-        let mut set_cell = |column: usize, half: CellHalf, y: u16, glyph: char, color: Color| {
-            if column >= visible_width {
-                return;
+        let mut set_cell = |column: usize, y: u16, glyph: char, color: Color| {
+            if column < visible_width {
+                buf[(left + column as u16, y)].set_char(glyph).set_fg(color);
             }
-            let cell = &mut buf[(left + column as u16, y)];
-            // A right half joins the left half already drawn in this cell: the dots add up and
-            // the left bar's color stays, unless it drew nothing.
-            if half == CellHalf::Right {
-                let drawn = cell.symbol().chars().next().unwrap_or(' ');
-                if drawn != ' ' {
-                    let merged = braille_mask(drawn) | braille_mask(glyph);
-                    cell.set_char(char::from_u32(0x2800 + merged as u32).unwrap_or(' '));
-                    return;
-                }
-            }
-            cell.set_char(glyph).set_fg(color);
         };
 
         // In vertical mode the color depends on the row, not on the bar, so it is worked out once
@@ -856,11 +846,7 @@ impl Widget for Soundwave<'_> {
             .collect();
 
         for (i, &amplitude) in self.bars.iter().enumerate() {
-            let BarSlot {
-                column,
-                half,
-                gap_after,
-            } = slots[i];
+            let column = i * columns_per_bar;
             let color = self.palette.bar_color(i, bar_count).color();
             // Mirror reflection colors: softer/darker tones for depth effect
             let mirror_color = self.palette.mirror_bar_color(i, bar_count);
@@ -874,7 +860,7 @@ impl Widget for Soundwave<'_> {
                 let glyph = match self.render_mode {
                     RenderMode::Blocks => bar_glyph(normalized, threshold, upper_rows, WAVE_CHARS),
                     RenderMode::Canvas => {
-                        braille_glyph(cell_dots(normalized, row, upper_rows), true, half)
+                        braille_glyph(cell_dots(normalized, row, upper_rows), true)
                     }
                 };
                 let y = base_y - 1 - row as u16;
@@ -882,9 +868,9 @@ impl Widget for Soundwave<'_> {
                     .get(row)
                     .copied()
                     .unwrap_or_else(|| fade(color, row_fade));
-                set_cell(column, half, y, glyph, color);
-                if gap_after {
-                    set_cell(column + 1, CellHalf::Full, y, ' ', color);
+                set_cell(column, y, glyph, color);
+                if self.gap {
+                    set_cell(column + 1, y, ' ', color);
                 }
             }
 
@@ -899,7 +885,7 @@ impl Widget for Soundwave<'_> {
                         INVERTED_WAVE_CHARS,
                     ),
                     RenderMode::Canvas => {
-                        braille_glyph(cell_dots(mirror_amplitude, row, mirror_rows), false, half)
+                        braille_glyph(cell_dots(mirror_amplitude, row, mirror_rows), false)
                     }
                 };
                 let y = base_y + row as u16;
@@ -907,9 +893,9 @@ impl Widget for Soundwave<'_> {
                     .get(row)
                     .copied()
                     .unwrap_or_else(|| fade(mirror_color, row_fade));
-                set_cell(column, half, y, glyph, mirror_color);
-                if gap_after {
-                    set_cell(column + 1, CellHalf::Full, y, ' ', mirror_color);
+                set_cell(column, y, glyph, mirror_color);
+                if self.gap {
+                    set_cell(column + 1, y, ' ', mirror_color);
                 }
             }
         }
@@ -1078,7 +1064,7 @@ mod tests {
         let mut padded = bars.to_vec();
         padded.resize(32, 0.0);
         let buffer = render_canvas(&padded, 64, 4, false);
-        let left = 0;
+        let left = (64 - 32 * COLUMNS_PER_BAR as u16) / 2;
         let at = |bar: u16, y: u16| buffer[(left + bar * 2, y)].symbol().to_string();
 
         assert_eq!(
@@ -1098,7 +1084,7 @@ mod tests {
         // 4 rows: 2 above and 2 reflected; the mirror is attenuated to 0.6, so 0.3 of the
         // reflection's 8 dots is 2 dots, hanging from the top of its first row.
         let buffer = render_canvas(&bars, 64, 4, true);
-        let x = 0;
+        let x = (64 - 32 * COLUMNS_PER_BAR as u16) / 2;
         assert_eq!(buffer[(x, 1)].symbol(), "⣿");
         assert_eq!(buffer[(x, 2)].symbol(), "⠛");
         assert_eq!(buffer[(x, 3)].symbol(), " ");
@@ -1185,49 +1171,11 @@ mod tests {
             mode: ColorMode::Gradient,
             ..Palette::default()
         };
-        let buffer = render_bars_with(&[1.0; 32], 20, 6, &gradient);
+        let buffer = render_bars_with(&[1.0; 32], 40, 6, &gradient);
 
-        // 20 columns show the first 20 bars; the rest, the treble side, is clipped.
+        // 40 columns show the first 20 bars; the rest, the treble side, is clipped.
         assert_eq!(buffer[(0, 0)].fg, Color::Rgb(0, 255, 255));
-        assert_eq!(buffer[(19, 0)].fg, gradient.bar_color(19, 32).color());
-    }
-
-    #[test]
-    fn test_gap_gives_way_before_the_row_overflows() {
-        // 48 bars in 60 columns: 12 of them keep a gap, and the row fills the width.
-        let buffer = render_bars(&[1.0; 48], 60, 6);
-        let filled = (0..60).filter(|&x| buffer[(x, 0)].symbol() != " ").count();
-        assert_eq!(filled, 48);
-        assert_ne!(buffer[(0, 0)].symbol(), " ");
-    }
-
-    #[test]
-    fn test_canvas_squeezes_two_bars_into_a_cell() {
-        let mut bars = vec![0.0; 80];
-        bars[0] = 1.0;
-        bars[1] = 0.0;
-        let backend = TestBackend::new(40, 6);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                draw_soundwave(
-                    frame,
-                    frame.area(),
-                    &bars,
-                    &Palette::default(),
-                    1.0,
-                    SoundwaveParts {
-                        gap: true,
-                        mirror: false,
-                        render_mode: RenderMode::Canvas,
-                    },
-                )
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        // 80 bars in 40 columns: every cell holds two bars; only the first fills its half.
-        assert_eq!(buffer[(0, 5)].symbol(), "⡇");
-        assert_eq!(buffer[(1, 5)].symbol(), " ");
+        assert_eq!(buffer[(39, 0)].fg, gradient.bar_color(19, 32).color());
     }
 
     #[test]
@@ -1365,7 +1313,7 @@ mod tests {
     #[test]
     fn test_both_notices_stack_in_the_top_right_corner() {
         let mut app = App::new();
-        app.set_terminal_width(20);
+        app.set_terminal_width(40);
         app.increase_bar_count();
         app.increase_gain();
 

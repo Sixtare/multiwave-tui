@@ -1,6 +1,5 @@
 pub mod app;
 pub mod audio_processor;
-pub mod bar_layout;
 pub mod bar_motion;
 pub mod capture_settings;
 pub mod color_picker;

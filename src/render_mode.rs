@@ -1,7 +1,5 @@
 //! How the bars are drawn: Unicode block glyphs or braille dots.
 
-use crate::bar_layout::CellHalf;
-
 /// The glyph set the visualizer draws the bars with.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RenderMode {
@@ -32,11 +30,11 @@ impl RenderMode {
 /// Braille dot bits of one dot column (left, then right), listed from the bottom dot up.
 const BOTTOM_UP: [u8; 8] = [0x40, 0x04, 0x02, 0x01, 0x80, 0x20, 0x10, 0x08];
 
-/// The braille glyph of one cell with `dots` (0 to 4) filled rows, in the dot columns `half`
-/// covers; a plain space when empty, like the block glyphs.
+/// The braille glyph of one cell with `dots` (0 to 4) filled rows, in both dot columns; a plain
+/// space when empty, like the block glyphs.
 /// `from_bottom` fills from the bottom of the cell (bars growing up); otherwise from the top
 /// (the reflection growing down).
-pub fn braille_glyph(dots: usize, from_bottom: bool, half: CellHalf) -> char {
+pub fn braille_glyph(dots: usize, from_bottom: bool) -> char {
     let dots = dots.min(4);
     if dots == 0 {
         return ' ';
@@ -45,21 +43,9 @@ pub fn braille_glyph(dots: usize, from_bottom: bool, half: CellHalf) -> char {
     for level in 0..dots {
         // Dot rows are stored bottom-up; the top-down fill takes them in the opposite order.
         let row = if from_bottom { level } else { 3 - level };
-        mask |= match half {
-            CellHalf::Full => BOTTOM_UP[row] | BOTTOM_UP[row + 4],
-            CellHalf::Left => BOTTOM_UP[row],
-            CellHalf::Right => BOTTOM_UP[row + 4],
-        };
+        mask |= BOTTOM_UP[row] | BOTTOM_UP[row + 4];
     }
     char::from_u32(0x2800 + mask as u32).expect("braille block is valid")
-}
-
-/// The dot bits of a braille glyph; 0 for a space or any other character.
-pub fn braille_mask(glyph: char) -> u8 {
-    match glyph as u32 {
-        code @ 0x2800..=0x28FF => (code - 0x2800) as u8,
-        _ => 0,
-    }
 }
 
 /// Filled dots (0 to 4) of the cell at `row` of a column `rows` cells tall, for a bar of
@@ -75,25 +61,15 @@ mod tests {
 
     #[test]
     fn test_braille_fills_from_the_requested_side() {
-        assert_eq!(braille_glyph(0, true, CellHalf::Full), ' ');
-        assert_eq!(braille_glyph(1, true, CellHalf::Full), '⣀');
-        assert_eq!(braille_glyph(2, true, CellHalf::Full), '⣤');
-        assert_eq!(braille_glyph(3, true, CellHalf::Full), '⣶');
-        assert_eq!(braille_glyph(4, true, CellHalf::Full), '⣿');
-        assert_eq!(braille_glyph(1, false, CellHalf::Full), '⠉');
-        assert_eq!(braille_glyph(2, false, CellHalf::Full), '⠛');
-        assert_eq!(braille_glyph(3, false, CellHalf::Full), '⠿');
-        assert_eq!(braille_glyph(4, false, CellHalf::Full), '⣿');
-    }
-
-    #[test]
-    fn test_braille_halves_fill_one_dot_column_each() {
-        assert_eq!(braille_glyph(4, true, CellHalf::Left), '⡇');
-        assert_eq!(braille_glyph(4, true, CellHalf::Right), '⢸');
-        let both = braille_mask(braille_glyph(2, true, CellHalf::Left))
-            | braille_mask(braille_glyph(3, true, CellHalf::Right));
-        assert_eq!(both, 0x40 | 0x04 | 0x80 | 0x20 | 0x10);
-        assert_eq!(braille_mask(' '), 0);
+        assert_eq!(braille_glyph(0, true), ' ');
+        assert_eq!(braille_glyph(1, true), '⣀');
+        assert_eq!(braille_glyph(2, true), '⣤');
+        assert_eq!(braille_glyph(3, true), '⣶');
+        assert_eq!(braille_glyph(4, true), '⣿');
+        assert_eq!(braille_glyph(1, false), '⠉');
+        assert_eq!(braille_glyph(2, false), '⠛');
+        assert_eq!(braille_glyph(3, false), '⠿');
+        assert_eq!(braille_glyph(4, false), '⣿');
     }
 
     #[test]

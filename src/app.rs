@@ -1,5 +1,4 @@
 use crate::{
-    bar_layout::capacity,
     bar_motion::BarMotion,
     color_session::ColorSession,
     config::Config,
@@ -16,6 +15,10 @@ pub const MIN_BARS: usize = 32;
 pub const MAX_BARS: usize = 512;
 /// Bars added or removed by each key press.
 pub const BAR_STEP: usize = 8;
+/// Terminal columns used by one bar with the gap on: its glyph plus a spacer.
+pub const COLUMNS_PER_BAR: usize = 2;
+/// Terminal columns used by one bar with the gap off: just its glyph, so neighbours touch.
+pub const COLUMNS_PER_BAR_TIGHT: usize = 1;
 /// Lowest and highest sensitivity (gain) multiplier, and how much each key press changes it.
 pub const MIN_GAIN: f32 = 0.1;
 pub const MAX_GAIN: f32 = 5.0;
@@ -219,15 +222,18 @@ impl App {
         self.audio_error = None;
     }
 
-    /// Most bars the terminal width can hold, never below [`MIN_BARS`] or above [`MAX_BARS`]. The
-    /// gap between bars and then the bar width give way to make room (see `bar_layout`), so the
-    /// gap setting does not change it; canvas mode fits two bars per column.
+    /// Terminal columns one bar takes, which depends on whether the gap between bars is on.
+    pub fn columns_per_bar(&self) -> usize {
+        if self.bar_gap {
+            COLUMNS_PER_BAR
+        } else {
+            COLUMNS_PER_BAR_TIGHT
+        }
+    }
+
+    /// Most bars that fit the terminal width, never below [`MIN_BARS`] or above [`MAX_BARS`].
     pub fn max_bar_count(&self) -> usize {
-        capacity(
-            self.terminal_width as usize,
-            self.render_mode == RenderMode::Canvas,
-        )
-        .clamp(MIN_BARS, MAX_BARS)
+        (self.terminal_width as usize / self.columns_per_bar()).clamp(MIN_BARS, MAX_BARS)
     }
 
     /// Records the terminal width and shrinks or regrows the shown bars to fit it.
@@ -394,7 +400,6 @@ impl App {
     /// Switches between block glyphs and braille dots.
     pub fn toggle_render_mode(&mut self) {
         self.render_mode = self.render_mode.toggled();
-        self.sync_bar_count();
         self.notify(NoticeKind::Render);
     }
 
@@ -795,27 +800,9 @@ mod tests {
     }
 
     #[test]
-    fn test_canvas_fits_two_bars_per_column_up_to_512() {
-        let mut app = app_with_width(100);
-        assert_eq!(app.max_bar_count(), 100);
-        app.toggle_render_mode();
-        assert_eq!(app.max_bar_count(), 200);
-        app.set_terminal_width(400);
-        assert_eq!(app.max_bar_count(), 512);
-        for _ in 0..100 {
-            app.increase_bar_count();
-        }
-        assert_eq!(app.bar_count, 512);
-
-        // Back to blocks, 400 columns hold 400 bars.
-        app.toggle_render_mode();
-        assert_eq!(app.bar_count, 400);
-    }
-
-    #[test]
     fn test_bar_count_last_step_stops_at_what_fits() {
-        // 100 columns fit 100 bars: 32, 40, ..., 96, then 100 rather than 104.
-        let mut app = app_with_width(100);
+        // 200 columns fit 100 bars: 32, 40, ..., 96, then 100 rather than 104.
+        let mut app = app_with_width(200);
         for _ in 0..20 {
             app.increase_bar_count();
         }
@@ -832,7 +819,7 @@ mod tests {
     #[test]
     fn test_increasing_from_a_non_multiple_goes_to_the_next_multiple() {
         // 36 bars fit now; after the terminal widens the next step is 40, not 44.
-        let mut app = app_with_width(36);
+        let mut app = app_with_width(72);
         app.increase_bar_count();
         assert_eq!(app.bar_count, 36);
         app.set_terminal_width(400);
@@ -849,7 +836,7 @@ mod tests {
 
     #[test]
     fn test_bar_count_is_minimum_on_a_too_narrow_terminal() {
-        let mut app = app_with_width(20);
+        let mut app = app_with_width(40);
         app.increase_bar_count();
         assert_eq!(app.bar_count, MIN_BARS);
         assert_eq!(app.max_bar_count(), MIN_BARS);
@@ -863,7 +850,7 @@ mod tests {
         }
         assert_eq!(app.bar_count, 96);
 
-        app.set_terminal_width(60);
+        app.set_terminal_width(120);
         assert_eq!(app.bar_count, 60);
         assert_eq!(app.motion.bars().len(), 60);
 
@@ -878,7 +865,7 @@ mod tests {
         for _ in 0..8 {
             app.increase_bar_count();
         }
-        app.set_terminal_width(60);
+        app.set_terminal_width(120);
 
         // 60 is the cap here; pressing → must not forget the 96 that was chosen.
         app.increase_bar_count();
@@ -893,7 +880,7 @@ mod tests {
         for _ in 0..8 {
             app.increase_bar_count();
         }
-        app.set_terminal_width(60);
+        app.set_terminal_width(120);
 
         app.decrease_bar_count();
 
