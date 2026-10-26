@@ -474,7 +474,13 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     } else {
         0
     };
-    let (popup_area, _) = menu_layout(area, POPUP_WIDTH, picker_width, height);
+    // The shortcuts box takes the side slot until the color picker needs it.
+    let side_width = if app.color.picker.is_some() {
+        picker_width
+    } else {
+        SHORTCUTS_WIDTH
+    };
+    let (popup_area, shortcuts_area) = menu_layout(area, POPUP_WIDTH, side_width, height);
     if popup_area.width < 3 || popup_area.height < 3 {
         return;
     }
@@ -551,7 +557,32 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
 
     if let Some(picker) = &app.color.picker {
         render_color_picker(frame, popup_area, picker);
+    } else if shortcuts_area.width >= 3 {
+        render_popup_shortcuts(frame, shortcuts_area);
     }
+}
+
+/// Keys that reach the popup's toggles directly, from the line of the first one down.
+const POPUP_SHORTCUTS: [&str; 3] = ["R", "G", "M"];
+
+/// Draws the `Shortcuts` box beside the Bar style popup, with each key on the line of its option.
+fn render_popup_shortcuts(frame: &mut Frame, area: Rect) {
+    let block = Block::bordered()
+        .title(" Shortcuts ")
+        .title_alignment(Alignment::Center)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    // The color rows and the blank line before the fade row have no shortcut; the fade row
+    // has none either.
+    let mut lines = vec![Line::default(); Palette::ROWS + 1];
+    lines.extend(
+        POPUP_SHORTCUTS
+            .iter()
+            .map(|&key| Line::from(key).centered()),
+    );
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// Draws the color picker to the right of `popup_area`, or over its right edge when the terminal
@@ -1660,6 +1691,38 @@ mod tests {
         let usual = loudest_bar_height(1.0);
         assert_eq!(top_color(usual, 1.0), final_color);
         assert_ne!(top_color(usual, 2.0), final_color);
+    }
+
+    #[test]
+    fn test_bar_style_popup_lists_shortcuts_until_the_color_picker_opens() {
+        let mut app = App::new();
+        app.open_color_popup();
+        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
+        let mut screen = |app: &mut App| -> Vec<String> {
+            terminal.draw(|frame| render(app, frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..14)
+                .map(|y| {
+                    (0..100)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect()
+                })
+                .collect()
+        };
+        let rows = screen(&mut app);
+        let line = |needle: &str| rows.iter().position(|r| r.contains(needle)).unwrap();
+        assert!(rows.iter().any(|r| r.contains("Shortcuts")));
+        // Each key sits beside its option.
+        assert!(rows[line("Render")].contains(" R "));
+        assert!(rows[line("Bar gap")].contains(" G "));
+        assert!(rows[line("Mirror")].contains(" M "));
+
+        // The picker takes the side slot, so the box goes away.
+        app.color.select_next(&app.palette);
+        app.color.activate(&mut app.palette);
+        assert!(app.color.picker.is_some());
+        let rows = screen(&mut app);
+        assert!(!rows.iter().any(|r| r.contains("Shortcuts")));
     }
 
     #[test]
