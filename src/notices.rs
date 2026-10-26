@@ -16,6 +16,7 @@ pub enum NoticeKind {
     Mirror,
     Fps,
     Color,
+    Render,
 }
 
 const KINDS: usize = 8;

@@ -17,6 +17,7 @@ use crate::{
     device_menu::{DeviceMenu, DeviceTab},
     menu::MenuRow,
     palette::{BarColor, Palette},
+    render_mode::{RenderMode, braille_glyph, cell_dots},
 };
 
 /// Everything [`render`] reads from the app, plus the terminal size.
@@ -42,6 +43,8 @@ pub struct FrameState {
     bar_gap: bool,
     /// Whether the reflection below the bars is drawn.
     mirror: bool,
+    /// Whether the bars are drawn with blocks or braille dots.
+    render_mode: RenderMode,
     palette: Palette,
     /// Manual sensitivity, which sets where the vertical gradient ends.
     gain: f32,
@@ -80,6 +83,7 @@ impl FrameState {
             },
             bar_gap: app.bar_gap,
             mirror: app.mirror,
+            render_mode: app.render_mode,
             palette: app.palette,
             gain: app.gain,
             color_row: app.color.row,
@@ -99,6 +103,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         SoundwaveParts {
             gap: app.bar_gap,
             mirror: app.mirror,
+            render_mode: app.render_mode,
         },
     );
     match app.overlay {
@@ -409,6 +414,7 @@ fn render_menu(frame: &mut Frame, app: &App) {
         MenuRow::BarGap => on_off(app.bar_gap),
         MenuRow::Mirror => on_off(app.mirror),
         MenuRow::Fps => format!("◀ {} ▶", app.fps),
+        MenuRow::Render => format!("◀ {} ▶", app.render_mode.label()),
     };
     let lines: Vec<Line> = MenuRow::ALL
         .iter()
@@ -685,6 +691,7 @@ struct Soundwave<'a> {
     gap: bool,
     /// Whether the reflection below the bars is drawn.
     mirror: bool,
+    render_mode: RenderMode,
 }
 
 impl Widget for Soundwave<'_> {
@@ -793,7 +800,12 @@ impl Widget for Soundwave<'_> {
             // 1. Upper Visualizer (grows upward from the center line to the top of the screen)
             for (row, &row_fade) in upper_fades.iter().enumerate() {
                 let threshold = row as f32 / upper_rows as f32;
-                let glyph = bar_glyph(normalized, threshold, upper_rows, WAVE_CHARS);
+                let glyph = match self.render_mode {
+                    RenderMode::Blocks => bar_glyph(normalized, threshold, upper_rows, WAVE_CHARS),
+                    RenderMode::Canvas => {
+                        braille_glyph(cell_dots(normalized, row, upper_rows), true)
+                    }
+                };
                 let y = base_y - 1 - row as u16;
                 let color = upper_row_colors
                     .get(row)
@@ -808,12 +820,17 @@ impl Widget for Soundwave<'_> {
             // 2. Mirror Effect (upside down, grows down towards screen bottom)
             for (row, &row_fade) in mirror_fades.iter().enumerate() {
                 let threshold = row as f32 / mirror_rows as f32;
-                let glyph = bar_glyph(
-                    mirror_amplitude,
-                    threshold,
-                    mirror_rows,
-                    INVERTED_WAVE_CHARS,
-                );
+                let glyph = match self.render_mode {
+                    RenderMode::Blocks => bar_glyph(
+                        mirror_amplitude,
+                        threshold,
+                        mirror_rows,
+                        INVERTED_WAVE_CHARS,
+                    ),
+                    RenderMode::Canvas => {
+                        braille_glyph(cell_dots(mirror_amplitude, row, mirror_rows), false)
+                    }
+                };
                 let y = base_y + row as u16;
                 let mirror_color = mirror_row_colors
                     .get(row)
@@ -835,6 +852,8 @@ pub struct SoundwaveParts {
     pub gap: bool,
     /// The reflection below the bars.
     pub mirror: bool,
+    /// Block glyphs or braille dots.
+    pub render_mode: RenderMode,
 }
 
 impl Default for SoundwaveParts {
@@ -842,6 +861,7 @@ impl Default for SoundwaveParts {
         Self {
             gap: true,
             mirror: true,
+            render_mode: RenderMode::default(),
         }
     }
 }
@@ -863,6 +883,7 @@ pub fn draw_soundwave(
             peak_height: loudest_bar_height(gain),
             gap: parts.gap,
             mirror: parts.mirror,
+            render_mode: parts.render_mode,
         },
         area,
     );
@@ -956,6 +977,72 @@ mod tests {
 
         // The bars use the whole height from the bottom edge up.
         assert!((0..6).all(|y| buffer[(24, y)].symbol() != " "));
+    }
+
+    fn render_canvas(bars: &[f32], width: u16, height: u16, mirror: bool) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw_soundwave(
+                    frame,
+                    frame.area(),
+                    bars,
+                    &Palette::default(),
+                    1.0,
+                    SoundwaveParts {
+                        mirror,
+                        render_mode: RenderMode::Canvas,
+                        ..SoundwaveParts::default()
+                    },
+                )
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn test_canvas_draws_braille_with_four_steps_per_row() {
+        // 4 rows without the mirror = 16 dots; 0.5 fills the 2 bottom rows, 0.28 rounds to 4 dots.
+        let bars = [0.5, 0.28, 0.0, 1.0];
+        let mut padded = bars.to_vec();
+        padded.resize(32, 0.0);
+        let buffer = render_canvas(&padded, 64, 4, false);
+        let left = (64 - 32 * COLUMNS_PER_BAR as u16) / 2;
+        let at = |bar: u16, y: u16| buffer[(left + bar * 2, y)].symbol().to_string();
+
+        assert_eq!(
+            (at(0, 3), at(0, 2), at(0, 1)),
+            ("⣿".into(), "⣿".into(), " ".into())
+        );
+        assert_eq!((at(1, 3), at(1, 2)), ("⣿".into(), " ".into()));
+        assert_eq!(at(2, 3), " ");
+        assert!((0..4).all(|y| at(3, y) == "⣿"));
+        // The spacer column stays empty.
+        assert_eq!(buffer[(left + 1, 3)].symbol(), " ");
+    }
+
+    #[test]
+    fn test_canvas_reflection_grows_down_from_the_center() {
+        let bars = vec![0.5; 32];
+        // 4 rows: 2 above and 2 reflected; the mirror is attenuated to 0.6, so 0.3 of the
+        // reflection's 8 dots is 2 dots, hanging from the top of its first row.
+        let buffer = render_canvas(&bars, 64, 4, true);
+        let x = (64 - 32 * COLUMNS_PER_BAR as u16) / 2;
+        assert_eq!(buffer[(x, 1)].symbol(), "⣿");
+        assert_eq!(buffer[(x, 2)].symbol(), "⠛");
+        assert_eq!(buffer[(x, 3)].symbol(), " ");
+    }
+
+    #[test]
+    fn test_canvas_keeps_the_block_colors() {
+        let bars = vec![1.0; 32];
+        let blocks = render_bars(&bars, 64, 6);
+        let canvas = render_canvas(&bars, 64, 6, true);
+        for y in 0..6 {
+            for x in 0..64 {
+                assert_eq!(blocks[(x, y)].fg, canvas[(x, y)].fg, "cell {x},{y}");
+            }
+        }
     }
 
     #[test]

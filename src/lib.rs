@@ -11,6 +11,7 @@ pub mod menu;
 pub mod notices;
 pub mod palette;
 pub mod pulse;
+pub mod render_mode;
 pub mod sound_device;
 pub mod tui;
 pub mod ui;

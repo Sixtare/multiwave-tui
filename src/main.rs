@@ -42,6 +42,7 @@ pub mod tui;
 
 /// Output listing and capture through `pactl`/`parec` (Linux).
 pub mod pulse;
+pub mod render_mode;
 
 /// Capturing a single application's audio on Windows.
 pub mod windows_apps;
