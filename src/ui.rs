@@ -519,7 +519,6 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
         })
         .collect();
     lines.insert(Palette::FADE_ROW, Line::default());
-    lines.push(Line::default());
     let on_off = |on: bool| if on { "on" } else { "off" };
     let toggles = [
         (ColorSession::RENDER_ROW, "Render", app.render_mode.label()),
