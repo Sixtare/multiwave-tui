@@ -8,7 +8,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::palette::{BarColor, ColorMode};
+use crate::{
+    palette::{BarColor, ColorMode},
+    render_mode::RenderMode,
+};
 
 /// Name of the directory holding the file, under `~/.local/share` on Linux and `%APPDATA%` on Windows.
 const DIR_NAME: &str = "visualizer";
@@ -32,6 +35,7 @@ pub struct Config {
     /// Bass, mids and treble colors.
     pub bands: [BarColor; 3],
     pub fade_level: u8,
+    pub render_mode: RenderMode,
 }
 
 impl Default for Config {
@@ -82,7 +86,7 @@ impl Config {
         };
         format!(
             "bars = {}\ngain = {}\nsmoothing = {}\nlast_smoothing = {}\nbar_gap = {}\nmirror = {}\nfps = {}\n\
-             color_mode = {}\ncolor_bass = {}\ncolor_mids = {}\ncolor_treble = {}\nfade = {}\n",
+             color_mode = {}\ncolor_bass = {}\ncolor_mids = {}\ncolor_treble = {}\nfade = {}\nrender = {}\n",
             self.bars,
             self.gain,
             self.smoothing_level,
@@ -95,6 +99,7 @@ impl Config {
             self.bands[1].hex(),
             self.bands[2].hex(),
             self.fade_level,
+            self.render_mode.label(),
         )
     }
 
@@ -128,6 +133,14 @@ impl Config {
                 "color_mids" => set(&mut config.bands[1], BarColor::parse_hex(value)),
                 "color_treble" => set(&mut config.bands[2], BarColor::parse_hex(value)),
                 "fade" => set(&mut config.fade_level, value.parse().ok()),
+                "render" => set(
+                    &mut config.render_mode,
+                    match value {
+                        "blocks" => Some(RenderMode::Blocks),
+                        "canvas" => Some(RenderMode::Canvas),
+                        _ => None,
+                    },
+                ),
                 _ => {}
             }
         }
@@ -162,6 +175,7 @@ mod tests {
                 BarColor::rgb(255, 0, 128),
             ],
             fade_level: 8,
+            render_mode: RenderMode::Canvas,
         };
         assert_eq!(Config::parse(&config.to_text()), config);
     }

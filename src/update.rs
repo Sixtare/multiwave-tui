@@ -155,6 +155,7 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
         KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
         KeyCode::Char('m') | KeyCode::Char('M') => app.toggle_mirror(),
         KeyCode::Char('f') | KeyCode::Char('F') => app.change_fps(true),
+        KeyCode::Char('r') | KeyCode::Char('R') => app.toggle_render_mode(),
         KeyCode::Enter => match app.menu_row {
             MenuRow::Device => app.open_device_popup(),
             MenuRow::Color => app.open_color_popup(),
@@ -162,6 +163,7 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
             MenuRow::BarGap => app.toggle_bar_gap(),
             MenuRow::Mirror => app.toggle_mirror(),
             MenuRow::Fps => app.change_fps(true),
+            MenuRow::Render => app.toggle_render_mode(),
             MenuRow::Sensitivity | MenuRow::Bars => {}
         },
         KeyCode::Left | KeyCode::Right => {
@@ -175,6 +177,7 @@ fn update_menu(app: &mut App, key_event: KeyEvent) {
                 (MenuRow::BarGap, _) => app.toggle_bar_gap(),
                 (MenuRow::Mirror, _) => app.toggle_mirror(),
                 (MenuRow::Fps, forward) => app.change_fps(forward),
+                (MenuRow::Render, _) => app.toggle_render_mode(),
                 (MenuRow::Device | MenuRow::Color, _) => {}
             }
         }
@@ -266,6 +269,7 @@ pub fn update(app: &mut App, key_event: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_bar_gap(),
         KeyCode::Char('m') | KeyCode::Char('M') => app.toggle_mirror(),
         KeyCode::Char('f') | KeyCode::Char('F') => app.change_fps(true),
+        KeyCode::Char('r') | KeyCode::Char('R') => app.toggle_render_mode(),
         KeyCode::Char('c') | KeyCode::Char('C') => app.open_color_popup(),
         KeyCode::Right => app.increase_bar_count(),
         KeyCode::Left => app.decrease_bar_count(),
@@ -283,6 +287,7 @@ mod tests {
         color_picker::PickerFocus,
         event::Event,
         palette::{BarColor, ColorMode},
+        render_mode::RenderMode,
     };
 
     fn key(code: KeyCode) -> Event {
@@ -685,6 +690,8 @@ mod tests {
         assert_eq!(app.fps, 90);
 
         press(&mut app, KeyCode::Down);
+        assert_eq!(app.menu_row, MenuRow::Render);
+        press(&mut app, KeyCode::Down);
         assert_eq!(app.menu_row, MenuRow::Device);
     }
 
@@ -718,6 +725,24 @@ mod tests {
         assert!(!app.mirror);
         press(&mut app, KeyCode::Char('M'));
         assert!(app.mirror);
+    }
+
+    #[test]
+    fn test_r_switches_the_render_mode_from_the_visualizer_and_the_menu() {
+        let mut app = App::new();
+        assert_eq!(app.render_mode, RenderMode::Blocks);
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(app.render_mode, RenderMode::Canvas);
+        assert_eq!(app.render_notice(), Some(RenderMode::Canvas));
+
+        press(&mut app, KeyCode::Esc);
+        app.menu_row = MenuRow::Render;
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.render_mode, RenderMode::Blocks);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.render_mode, RenderMode::Canvas);
+        press(&mut app, KeyCode::Char('R'));
+        assert_eq!(app.render_mode, RenderMode::Blocks);
     }
 
     #[test]

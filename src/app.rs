@@ -6,6 +6,7 @@ use crate::{
     menu::MenuRow,
     notices::{NoticeKind, Notices},
     palette::{MAX_FADE_LEVEL, Palette},
+    render_mode::RenderMode,
 };
 
 /// Fewest bars the visualizer shows, even on a terminal too narrow to fit them.
@@ -75,6 +76,8 @@ pub struct App {
     pub bar_gap: bool,
     /// Whether the reflection below the bars is drawn. On by default.
     pub mirror: bool,
+    /// Whether the bars are drawn with block glyphs or braille dots.
+    pub render_mode: RenderMode,
     /// Frames (ticks) per second, one of [`FPS_OPTIONS`].
     pub fps: u32,
     /// Attack factor at full smoothing: fast and damped rising response.
@@ -117,6 +120,7 @@ impl Default for App {
             last_smoothing_level: MAX_SMOOTHING_LEVEL,
             bar_gap: true,
             mirror: true,
+            render_mode: RenderMode::default(),
             fps: DEFAULT_FPS,
             attack_factor: 0.40,
             decay_factor: 0.12,
@@ -160,6 +164,7 @@ impl App {
             color_mode: self.palette.mode,
             bands: self.palette.bands,
             fade_level: self.palette.fade_level,
+            render_mode: self.render_mode,
         }
     }
 
@@ -172,6 +177,7 @@ impl App {
         self.last_smoothing_level = config.last_smoothing_level.clamp(1, MAX_SMOOTHING_LEVEL);
         self.bar_gap = config.bar_gap;
         self.mirror = config.mirror;
+        self.render_mode = config.render_mode;
         if FPS_OPTIONS.contains(&config.fps) {
             self.fps = config.fps;
         }
@@ -391,6 +397,18 @@ impl App {
         self.notify(NoticeKind::Mirror);
     }
 
+    /// Switches between block glyphs and braille dots.
+    pub fn toggle_render_mode(&mut self) {
+        self.render_mode = self.render_mode.toggled();
+        self.notify(NoticeKind::Render);
+    }
+
+    /// The render mode to announce on screen right after the user changed it.
+    pub fn render_notice(&self) -> Option<RenderMode> {
+        self.notice_active(NoticeKind::Render)
+            .then_some(self.render_mode)
+    }
+
     /// The mirror state to announce on screen right after the user toggled it.
     pub fn mirror_notice(&self) -> Option<bool> {
         self.notice_active(NoticeKind::Mirror)
@@ -540,6 +558,8 @@ impl App {
                 .map(|on| format!(" mirror {} ", on_off(on))),
             self.fps_notice().map(|fps| format!(" {fps} fps ")),
             self.color_notice().map(|color| format!(" color: {color} ")),
+            self.render_notice()
+                .map(|mode| format!(" render {} ", mode.label())),
         ]
         .into_iter()
         .flatten()
