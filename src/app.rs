@@ -377,10 +377,14 @@ impl App {
             .then(|| self.smoothing_text())
     }
 
-    /// Turns the gap between bars on or off. Bars take fewer columns without it, so more of the
-    /// chosen count can fit.
+    /// Turns the gap between bars on or off, changing the bar count so the bars fill the same
+    /// share of the screen width as before (a full row stays full).
     pub fn toggle_bar_gap(&mut self) {
+        let old_columns = self.bar_count * self.columns_per_bar();
         self.bar_gap = !self.bar_gap;
+        let new_columns = self.columns_per_bar();
+        self.chosen_bar_count =
+            ((old_columns + new_columns / 2) / new_columns).clamp(MIN_BARS, MAX_BARS);
         self.notify(NoticeKind::BarGap);
         self.sync_bar_count();
     }
@@ -797,6 +801,28 @@ mod tests {
             app.increase_bar_count();
         }
         assert_eq!(app.bar_count, MAX_BARS);
+    }
+
+    #[test]
+    fn test_toggling_the_gap_keeps_the_filled_share_of_the_width() {
+        // 100 columns full of gapped bars: 50 bars. Without the gap 100 bars fill it again.
+        let mut app = app_with_width(100);
+        for _ in 0..20 {
+            app.increase_bar_count();
+        }
+        assert_eq!(app.bar_count, 50);
+        app.toggle_bar_gap();
+        assert_eq!(app.bar_count, 100);
+        app.toggle_bar_gap();
+        assert_eq!(app.bar_count, 50);
+
+        // Half filled stays half filled: 40 columns of gapped bars are 20 tight bars, which the
+        // minimum raises to 32.
+        let mut app = app_with_width(200);
+        app.toggle_bar_gap();
+        assert_eq!(app.bar_count, 64);
+        app.toggle_bar_gap();
+        assert_eq!(app.bar_count, 32);
     }
 
     #[test]
@@ -1270,7 +1296,7 @@ mod tests {
 
         assert_eq!(
             app.visible_notices(),
-            [" 40 bars ", " sensitivity 1.10x ", " bar gap off "]
+            [" 72 bars ", " sensitivity 1.10x ", " bar gap off "]
         );
     }
 
