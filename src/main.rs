@@ -43,6 +43,9 @@ pub mod tui;
 /// Output listing and capture through `pactl`/`parec` (Linux).
 pub mod pulse;
 
+/// Capturing a single application's audio on Windows.
+pub mod windows_apps;
+
 /// Sound device audio capture with cpal.
 pub mod sound_device;
 

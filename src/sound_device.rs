@@ -12,7 +12,11 @@ use cpal::{
 use crate::audio_processor::AudioProcessor;
 use crate::capture_settings::CaptureSettings;
 use crate::event::Event;
-use crate::pulse::{self, AppSource, MonitorSource, PulseCapture};
+#[cfg(not(windows))]
+use crate::pulse::AppSource;
+use crate::pulse::{self, MonitorSource, PulseCapture};
+#[cfg(windows)]
+use crate::windows_apps::{self, AppSource, ProcessCapture};
 
 const DEFAULT_DEVICE_KEY: &str = "__default_output__";
 const DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
@@ -30,6 +34,9 @@ enum Source {
 enum Capture {
     Cpal(Stream),
     Pulse(PulseCapture),
+    /// One application, through WASAPI process loopback.
+    #[cfg(windows)]
+    Process(ProcessCapture),
 }
 
 struct DeviceEntry {
@@ -349,15 +356,14 @@ impl SoundDevice {
     /// them so [`SoundDevice::switch_to_app`] can take a row of this list.
     pub fn list_apps(&mut self) -> AppListUpdate {
         self.last_app_check = Instant::now();
-        self.apps = pulse::list_apps().unwrap_or_default();
+        self.apps = list_platform_apps().unwrap_or_default();
         // The captured application stays listed even when it is paused and has no stream.
         AppListUpdate {
             names: self.apps.iter().map(|app| app.label.clone()).collect(),
-            active: self.captured_app.as_ref().and_then(|captured| {
-                self.apps
-                    .iter()
-                    .position(|app| app.sink_input == captured.sink_input)
-            }),
+            active: self
+                .captured_app
+                .as_ref()
+                .and_then(|captured| self.apps.iter().position(|app| same_app(app, captured))),
         }
     }
 
@@ -373,13 +379,7 @@ impl SoundDevice {
             self.apps.get(index).cloned().ok_or_else(|| {
                 color_eyre::eyre::eyre!("Application index out of range: {index}")
             })?;
-        let (capture, device_info) = Self::start_pulse_capture(
-            &app.monitor,
-            Some(app.sink_input),
-            &app.label,
-            Arc::clone(&self.settings),
-            sender,
-        )?;
+        let (capture, device_info) = start_app_capture(&app, Arc::clone(&self.settings), sender)?;
         self._capture = Some(capture);
         self.name = app.label.clone();
         self.info = device_info;
@@ -400,10 +400,7 @@ impl SoundDevice {
             return None;
         }
         self.last_captured_check = Instant::now();
-        let still_playing = pulse::list_apps()
-            .map(|apps| apps.iter().any(|app| app.sink_input == captured.sink_input))
-            .unwrap_or(true);
-        if still_playing {
+        if app_is_running(captured) {
             return None;
         }
         Some(self.fall_back_to_default_output(sender))
@@ -679,6 +676,67 @@ impl SoundDevice {
 ///
 /// Identity is the stable device key, not the row index: hot-plugging an endpoint can shift
 /// every index, while a friendly-name collision on Windows must not confuse two endpoints.
+/// The applications that can be captured on this platform.
+#[cfg(not(windows))]
+fn list_platform_apps() -> Option<Vec<AppSource>> {
+    pulse::list_apps()
+}
+
+#[cfg(windows)]
+fn list_platform_apps() -> Option<Vec<AppSource>> {
+    windows_apps::list_apps()
+}
+
+#[cfg(not(windows))]
+fn same_app(a: &AppSource, b: &AppSource) -> bool {
+    a.sink_input == b.sink_input
+}
+
+#[cfg(windows)]
+fn same_app(a: &AppSource, b: &AppSource) -> bool {
+    a.pid == b.pid && a.exe == b.exe
+}
+
+/// Whether the captured application is still there. On Linux that means it still has a playing
+/// stream; on Windows its process is still running, so pausing does not end the capture. When the
+/// answer cannot be found out it counts as still there.
+#[cfg(not(windows))]
+fn app_is_running(app: &AppSource) -> bool {
+    pulse::list_apps()
+        .map(|apps| apps.iter().any(|listed| same_app(listed, app)))
+        .unwrap_or(true)
+}
+
+#[cfg(windows)]
+fn app_is_running(app: &AppSource) -> bool {
+    windows_apps::is_running(app)
+}
+
+#[cfg(not(windows))]
+fn start_app_capture(
+    app: &AppSource,
+    settings: Arc<CaptureSettings>,
+    sender: mpsc::Sender<Event>,
+) -> Result<(Capture, String)> {
+    SoundDevice::start_pulse_capture(
+        &app.monitor,
+        Some(app.sink_input),
+        &app.label,
+        settings,
+        sender,
+    )
+}
+
+#[cfg(windows)]
+fn start_app_capture(
+    app: &AppSource,
+    settings: Arc<CaptureSettings>,
+    sender: mpsc::Sender<Event>,
+) -> Result<(Capture, String)> {
+    let (capture, info) = ProcessCapture::start(app, settings, sender)?;
+    Ok((Capture::Process(capture), info))
+}
+
 fn resolve_device_positions(
     old_devices: &[(&str, bool)],
     new_devices: &[(&str, bool)],

@@ -15,6 +15,7 @@ pub mod sound_device;
 pub mod tui;
 pub mod ui;
 pub mod update;
+pub mod windows_apps;
 
 #[cfg(test)]
 mod tests {
