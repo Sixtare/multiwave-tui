@@ -4,6 +4,9 @@ pub mod app;
 /// Output devices listed in the device popup.
 pub mod device_menu;
 
+/// Where each bar sits on the row.
+pub mod bar_layout;
+
 /// Animated bar heights.
 pub mod bar_motion;
 

@@ -766,11 +766,11 @@ mod tests {
     }
 
     #[test]
-    fn test_g_toggles_the_bar_gap_and_more_bars_fit_without_it() {
+    fn test_g_toggles_the_bar_gap_without_changing_what_fits() {
         let mut app = App::new();
         app.set_terminal_width(100);
         assert!(app.bar_gap);
-        assert_eq!(app.max_bar_count(), 50);
+        assert_eq!(app.max_bar_count(), 100);
         press(&mut app, KeyCode::Char('g'));
         assert!(!app.bar_gap);
         assert_eq!(app.max_bar_count(), 100);
@@ -811,7 +811,7 @@ mod tests {
             app.increase_bar_count();
         }
 
-        let outcome = apply_batch(&mut app, batch_of(vec![Event::Resize(120, 40)]));
+        let outcome = apply_batch(&mut app, batch_of(vec![Event::Resize(60, 40)]));
 
         assert_eq!(app.bar_count, 60);
         assert_eq!(outcome.actions, vec![AppAction::SetBarCount(60)]);
