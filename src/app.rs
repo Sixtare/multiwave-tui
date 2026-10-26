@@ -609,7 +609,7 @@ fn carousel_text(text: &str, width: usize, scrolling: bool, elapsed: u64, fps: u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{color_session::ColorSession, palette::ColorMode};
+    use crate::palette::ColorMode;
     use crate::{notices::NOTICE_TICKS, palette::BarColor};
 
     fn app_with_width(width: u16) -> App {
@@ -708,17 +708,13 @@ mod tests {
         assert_eq!(app.palette.mode, ColorMode::Single);
         app.open_color_popup();
         app.color.select_prev(&app.palette);
-        assert_eq!(app.color.row, ColorSession::MIRROR_ROW);
+        assert_eq!(app.color.row, 4);
         app.color.select_next(&app.palette);
         assert_eq!(app.color.row, 0);
         // Single color skips the mids and treble rows.
         app.color.select_next(&app.palette);
         app.color.select_next(&app.palette);
         assert_eq!(app.color.row, 4);
-        app.color.select_next(&app.palette);
-        assert_eq!(app.color.row, ColorSession::RENDER_ROW);
-        app.color.select_next(&app.palette);
-        app.color.select_next(&app.palette);
         app.color.select_next(&app.palette);
         assert_eq!(app.color.row, 0);
 
@@ -732,10 +728,6 @@ mod tests {
         app.color.change_option(&mut app.palette, true);
         assert_eq!(app.color.picker, None);
         app.color.select_prev(&app.palette);
-        assert_eq!(app.color.row, ColorSession::MIRROR_ROW);
-        for _ in 0..3 {
-            app.color.select_prev(&app.palette);
-        }
         assert_eq!(app.color.row, 4);
         app.color.select_prev(&app.palette);
         assert_eq!(app.color.row, 3);
@@ -754,9 +746,7 @@ mod tests {
     fn test_fade_row_steps_the_level_with_the_arrows() {
         let mut app = App::new();
         app.open_color_popup();
-        for _ in 0..4 {
-            app.color.select_prev(&app.palette);
-        }
+        app.color.select_prev(&app.palette);
         assert_eq!(app.color.row, Palette::FADE_ROW);
         assert_eq!(app.palette.fade_level, 5);
         // Enter does nothing; the arrows step the level by a tenth.

@@ -28,14 +28,6 @@ impl Default for ColorSession {
 }
 
 impl ColorSession {
-    /// The row of the render mode, after the palette's own rows. The rows from here on are
-    /// toggled by the app, since they are not part of the palette.
-    pub const RENDER_ROW: usize = Palette::ROWS;
-    /// The row of the gap between bars.
-    pub const GAP_ROW: usize = Self::RENDER_ROW + 1;
-    /// The row of the mirror, the last one.
-    pub const MIRROR_ROW: usize = Self::RENDER_ROW + 2;
-
     /// Starts a session on the mode row for `palette`.
     pub fn open(palette: &Palette) -> Self {
         Self {
@@ -53,29 +45,14 @@ impl ColorSession {
         *palette != self.palette_at_open
     }
 
-    /// Moves the cursor down, skipping grayed-out rows. The rows after the palette's (render, gap,
-    /// mirror) are always selectable; the cursor wraps from the last one to the first.
+    /// Moves the cursor down, skipping grayed-out rows.
     pub fn select_next(&mut self, palette: &Palette) {
-        self.row = match self.row {
-            Self::MIRROR_ROW => 0,
-            row if row >= Self::RENDER_ROW => row + 1,
-            row => match palette.next_row(row, true) {
-                wrapped if wrapped <= row => Self::RENDER_ROW,
-                next => next,
-            },
-        };
+        self.row = palette.next_row(self.row, true);
     }
 
     /// Moves the cursor up, skipping grayed-out rows.
     pub fn select_prev(&mut self, palette: &Palette) {
-        self.row = match self.row {
-            Self::RENDER_ROW => Palette::FADE_ROW,
-            row if row > Self::RENDER_ROW => row - 1,
-            row => match palette.next_row(row, false) {
-                wrapped if wrapped >= row => Self::MIRROR_ROW,
-                prev => prev,
-            },
-        };
+        self.row = palette.next_row(self.row, false);
     }
 
     /// Steps the value of the highlighted row with the arrows: the color mode to the next or
@@ -92,7 +69,7 @@ impl ColorSession {
     /// rows are changed with the arrows instead.
     pub fn activate(&mut self, palette: &mut Palette) {
         match self.row {
-            0 | Palette::FADE_ROW | Self::RENDER_ROW..=Self::MIRROR_ROW => {}
+            0 | Palette::FADE_ROW => {}
             _ => {
                 if let Some(color) = palette.row_color(self.row) {
                     self.color_before_picker = color;

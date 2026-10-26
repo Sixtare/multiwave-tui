@@ -9,18 +9,24 @@ pub enum MenuRow {
     Sensitivity,
     Bars,
     Smoothing,
+    BarGap,
+    Mirror,
     Fps,
+    Render,
 }
 
 impl MenuRow {
     /// Every row, top to bottom.
-    pub const ALL: [MenuRow; 6] = [
+    pub const ALL: [MenuRow; 9] = [
         MenuRow::Device,
         MenuRow::Color,
         MenuRow::Sensitivity,
         MenuRow::Bars,
         MenuRow::Smoothing,
+        MenuRow::BarGap,
+        MenuRow::Mirror,
         MenuRow::Fps,
+        MenuRow::Render,
     ];
 
     fn index(self) -> usize {
@@ -47,7 +53,10 @@ impl MenuRow {
             MenuRow::Sensitivity => "Sensitivity",
             MenuRow::Bars => "Bars",
             MenuRow::Smoothing => "Smoothing",
+            MenuRow::BarGap => "Bar gap",
+            MenuRow::Mirror => "Mirror",
             MenuRow::Fps => "FPS",
+            MenuRow::Render => "Render",
         }
     }
 
@@ -59,7 +68,10 @@ impl MenuRow {
             MenuRow::Sensitivity => "↑/↓",
             MenuRow::Bars => "←/→",
             MenuRow::Smoothing => "S",
+            MenuRow::BarGap => "G",
+            MenuRow::Mirror => "M",
             MenuRow::Fps => "F",
+            MenuRow::Render => "R",
         }
     }
 }
@@ -70,8 +82,8 @@ mod tests {
 
     #[test]
     fn test_navigation_wraps_around() {
-        assert_eq!(MenuRow::Fps.next(), MenuRow::Device);
-        assert_eq!(MenuRow::Device.previous(), MenuRow::Fps);
+        assert_eq!(MenuRow::Render.next(), MenuRow::Device);
+        assert_eq!(MenuRow::Device.previous(), MenuRow::Render);
         assert_eq!(MenuRow::Device.next(), MenuRow::Color);
     }
 

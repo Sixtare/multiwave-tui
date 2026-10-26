@@ -14,7 +14,6 @@ use crate::{
     app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, Overlay},
     audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
-    color_session::ColorSession,
     device_menu::{DeviceMenu, DeviceTab},
     menu::MenuRow,
     palette::{BarColor, Palette},
@@ -355,9 +354,9 @@ const SHORTCUTS_WIDTH: u16 = 13;
 const POPUP_WIDTH: u16 = MENU_WIDTH;
 /// Index of the menu row that a blank line follows (Bar style).
 const MENU_GAP_AFTER: usize = 1;
-/// Height of the main menu box, which the color popup and the device popup share: tall enough
-/// for the Bar style popup (its rows and borders), which has the most lines.
-const MENU_HEIGHT: u16 = 12;
+/// Height of the main menu box, which the color popup and the device popup share: its rows, the
+/// blank line after Bar style and the borders.
+const MENU_HEIGHT: u16 = MenuRow::ALL.len() as u16 + 3;
 /// Width of the color picker box beside the color popup: the square, a gap, the hue strip and
 /// its marker, plus the borders.
 const PICKER_WIDTH: u16 = SQUARE_COLS as u16 + 1 + 2 + 1 + 2;
@@ -406,6 +405,7 @@ fn render_menu(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, menu_area);
     frame.render_widget(block, menu_area);
 
+    let on_off = |on: bool| format!("◀ {} ▶", if on { "on" } else { "off" });
     // Columns left for a value after the cursor and the label.
     let value_width = (inner.width as usize).saturating_sub(2 + 14);
     let value = |row: MenuRow| match row {
@@ -414,7 +414,10 @@ fn render_menu(frame: &mut Frame, app: &App) {
         MenuRow::Sensitivity => format!("◀ {:.2}x ▶", app.gain),
         MenuRow::Bars => format!("◀ {} ▶", app.bar_count),
         MenuRow::Smoothing => format!("◀ {} ▶", app.smoothing_text()),
+        MenuRow::BarGap => on_off(app.bar_gap),
+        MenuRow::Mirror => on_off(app.mirror),
         MenuRow::Fps => format!("◀ {} ▶", app.fps),
+        MenuRow::Render => format!("◀ {} ▶", app.render_mode.label()),
     };
     let mut lines: Vec<Line> = MenuRow::ALL
         .iter()
@@ -524,29 +527,6 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
         })
         .collect();
     lines.insert(Palette::FADE_ROW, Line::default());
-    let on_off = |on: bool| if on { "on" } else { "off" };
-    let toggles = [
-        (ColorSession::RENDER_ROW, "Render", app.render_mode.label()),
-        (ColorSession::GAP_ROW, "Bar gap", on_off(app.bar_gap)),
-        (ColorSession::MIRROR_ROW, "Mirror", on_off(app.mirror)),
-    ];
-    for (row, label, value) in toggles {
-        let selected = app.color.row == row;
-        let style = if selected {
-            Style::default().fg(Color::Cyan).bold()
-        } else {
-            Style::default().fg(Color::White)
-        };
-        lines.push(Line::from(Span::styled(
-            format!(
-                "{} {:<9}◀ {} ▶",
-                if selected { ">" } else { " " },
-                label,
-                value
-            ),
-            style,
-        )));
-    }
     frame.render_widget(Paragraph::new(lines), inner);
 
     if let Some(picker) = &app.color.picker {
@@ -1344,7 +1324,6 @@ mod tests {
             .map(|(x, y)| buffer[(x, y)].symbol().to_string())
             .collect();
         assert!(text.contains("Bar Style"));
-        assert!(text.contains("Render") && text.contains("blocks"));
         assert!(text.contains("Single color"));
         // Bars outside the popup already use the previewed single color.
         assert_eq!(buffer[(8, 1)].fg, Color::Rgb(0, 255, 255));
