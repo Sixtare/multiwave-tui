@@ -191,7 +191,12 @@ const ROW_PREFIX_WIDTH: usize = 3;
 /// the mode row and [`DEVICE_POPUP_ROWS`] rows, at the center), the rows it lists and whether they need a scrollbar.
 fn device_popup_layout(area: Rect, names: usize) -> (Rect, usize, bool) {
     // The borders and the mode row take three lines besides the list.
-    let (popup, _) = menu_layout(area, MENU_WIDTH + SHORTCUTS_WIDTH, 0, DEVICE_POPUP_ROWS + 3);
+    let (menu, side) = menu_layout(area, MENU_WIDTH, SHORTCUTS_WIDTH, DEVICE_POPUP_ROWS + 3);
+    // Starts where the main menu does, so opening it from there does not move the left edge.
+    let popup = Rect {
+        width: menu.width + side.width,
+        ..menu
+    };
     let list_height = popup.height.saturating_sub(3) as usize;
     let needs_scrollbar = names > list_height && list_height > 0 && popup.width > 2;
     (popup, list_height, needs_scrollbar)
@@ -342,6 +347,8 @@ const MENU_WIDTH: u16 = 34;
 /// Width of the box beside the main menu that lists its shortcuts.
 const SHORTCUTS_WIDTH: u16 = 13;
 const POPUP_WIDTH: u16 = MENU_WIDTH;
+/// Height of the main menu box, which the color popup and the device popup share.
+const MENU_HEIGHT: u16 = MenuRow::ALL.len() as u16 + 2;
 /// Width of the color picker box beside the color popup: the square, a gap, the hue strip and
 /// its marker, plus the borders.
 const PICKER_WIDTH: u16 = SQUARE_COLS as u16 + 1 + 2 + 1 + 2;
@@ -376,8 +383,7 @@ fn menu_layout(area: Rect, width: u16, side_width: u16, height: u16) -> (Rect, R
 
 fn render_menu(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    let height = MenuRow::ALL.len() as u16 + 2;
-    let (menu_area, shortcuts_area) = menu_layout(area, MENU_WIDTH, SHORTCUTS_WIDTH, height);
+    let (menu_area, shortcuts_area) = menu_layout(area, MENU_WIDTH, SHORTCUTS_WIDTH, MENU_HEIGHT);
     if menu_area.width < 3 || menu_area.height < 3 {
         return;
     }
@@ -453,8 +459,7 @@ fn render_menu(frame: &mut Frame, app: &App) {
 fn render_color_popup(frame: &mut Frame, app: &App) {
     let area = frame.area();
     let palette = &app.palette;
-    // One extra line separates the fade rows from the colors.
-    let height = (Palette::ROWS as u16 + 3).min(area.height);
+    let height = MENU_HEIGHT;
     let picker_width = if app.color.picker.is_some() {
         PICKER_WIDTH
     } else {
@@ -1271,15 +1276,21 @@ mod tests {
             let right = (x..100)
                 .find(|&x| buffer[(x, row)].symbol() == "╮")
                 .unwrap();
-            (x, right)
+            (x, right, row)
         };
         let mut app = App::new();
         app.open_menu();
         let menu = left_corner(&mut app);
         app.open_color_popup();
         assert_eq!(left_corner(&mut app), menu);
+        // The device popup is wider (it covers the shortcuts box too) but starts at the same
+        // column and row.
+        let mut app = App::with_devices(vec!["One".into()], 0);
+        app.open_device_popup();
+        let device = left_corner(&mut app);
+        assert_eq!((device.0, device.2), (menu.0, menu.2));
         // Centered: 34 columns in 100.
-        assert_eq!(menu, (33, 66));
+        assert_eq!((menu.0, menu.1), (33, 66));
     }
 
     #[test]
