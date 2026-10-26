@@ -14,6 +14,7 @@ use crate::{
     app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, Overlay},
     audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
+    color_session::ColorSession,
     device_menu::{DeviceMenu, DeviceTab},
     menu::MenuRow,
     palette::{BarColor, Palette},
@@ -414,7 +415,6 @@ fn render_menu(frame: &mut Frame, app: &App) {
         MenuRow::BarGap => on_off(app.bar_gap),
         MenuRow::Mirror => on_off(app.mirror),
         MenuRow::Fps => format!("◀ {} ▶", app.fps),
-        MenuRow::Render => format!("◀ {} ▶", app.render_mode.label()),
     };
     let lines: Vec<Line> = MenuRow::ALL
         .iter()
@@ -477,7 +477,7 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     }
 
     let block = Block::bordered()
-        .title(" Bar Colors ")
+        .title(" Bar Style ")
         .title_alignment(Alignment::Center)
         .title_bottom(Line::from(" ←→ mode  Enter pick  Esc close ").centered())
         .border_type(BorderType::Rounded);
@@ -521,6 +521,22 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
         })
         .collect();
     lines.insert(Palette::FADE_ROW, Line::default());
+    let render_selected = app.color.row == ColorSession::RENDER_ROW;
+    let render_style = if render_selected {
+        Style::default().fg(Color::Cyan).bold()
+    } else {
+        Style::default().fg(Color::White)
+    };
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        format!(
+            "{} {:<9}◀ {} ▶",
+            if render_selected { ">" } else { " " },
+            "Render",
+            app.render_mode.label()
+        ),
+        render_style,
+    )));
     frame.render_widget(Paragraph::new(lines), inner);
 
     if let Some(picker) = &app.color.picker {
@@ -1144,7 +1160,7 @@ mod tests {
             .collect();
         for expected in [
             "Audio Output",
-            "Bar color",
+            "Bar style",
             "Sensitivity",
             "1.00x",
             "Bars",
@@ -1297,7 +1313,8 @@ mod tests {
             .flat_map(|y| (0..80).map(move |x| (x, y)))
             .map(|(x, y)| buffer[(x, y)].symbol().to_string())
             .collect();
-        assert!(text.contains("Bar Colors"));
+        assert!(text.contains("Bar Style"));
+        assert!(text.contains("Render") && text.contains("blocks"));
         assert!(text.contains("Single color"));
         // Bars outside the popup already use the previewed single color.
         assert_eq!(buffer[(8, 1)].fg, Color::Rgb(0, 255, 255));

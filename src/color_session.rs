@@ -28,6 +28,10 @@ impl Default for ColorSession {
 }
 
 impl ColorSession {
+    /// The row of the render mode, after the palette's own rows. The app changes it, since the
+    /// mode is not part of the palette.
+    pub const RENDER_ROW: usize = Palette::ROWS;
+
     /// Starts a session on the mode row for `palette`.
     pub fn open(palette: &Palette) -> Self {
         Self {
@@ -45,14 +49,29 @@ impl ColorSession {
         *palette != self.palette_at_open
     }
 
-    /// Moves the cursor down, skipping grayed-out rows.
+    /// Moves the cursor down, skipping grayed-out rows. The render row sits after the palette's
+    /// rows; the cursor wraps from it to the first one.
     pub fn select_next(&mut self, palette: &Palette) {
-        self.row = palette.next_row(self.row, true);
+        self.row = if self.row == Self::RENDER_ROW {
+            0
+        } else {
+            match palette.next_row(self.row, true) {
+                wrapped if wrapped <= self.row => Self::RENDER_ROW,
+                next => next,
+            }
+        };
     }
 
     /// Moves the cursor up, skipping grayed-out rows.
     pub fn select_prev(&mut self, palette: &Palette) {
-        self.row = palette.next_row(self.row, false);
+        self.row = if self.row == Self::RENDER_ROW {
+            Palette::FADE_ROW
+        } else {
+            match palette.next_row(self.row, false) {
+                wrapped if wrapped >= self.row => Self::RENDER_ROW,
+                prev => prev,
+            }
+        };
     }
 
     /// Steps the value of the highlighted row with the arrows: the color mode to the next or
@@ -69,7 +88,7 @@ impl ColorSession {
     /// rows are changed with the arrows instead.
     pub fn activate(&mut self, palette: &mut Palette) {
         match self.row {
-            0 | Palette::FADE_ROW => {}
+            0 | Palette::FADE_ROW | Self::RENDER_ROW => {}
             _ => {
                 if let Some(color) = palette.row_color(self.row) {
                     self.color_before_picker = color;
