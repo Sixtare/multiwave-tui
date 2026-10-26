@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// Name of the directory holding the file, under `~/.local/share` on Linux and `%APPDATA%` on Windows.
-const DIR_NAME: &str = "visualizer";
+const DIR_NAME: &str = "multiwave-tui";
 /// Name of the file inside that directory.
 const FILE_NAME: &str = "config";
 
@@ -45,7 +45,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Where the file lives: `~/.local/share/visualizer/config` on Linux, `%APPDATA%\visualizer\config`
+    /// Where the file lives: `~/.local/share/multiwave-tui/config` on Linux, `%APPDATA%\multiwave-tui\config`
     /// on Windows. `None` when the home directory is unknown.
     pub fn path() -> Option<PathBuf> {
         let base = if cfg!(windows) {
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn test_config_saves_and_loads_through_a_file() {
         let dir =
-            std::env::temp_dir().join(format!("visualizer-config-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("multiwave-tui-config-test-{}", std::process::id()));
         let path = dir.join("nested").join(FILE_NAME);
         let config = Config {
             gain: 2.5,
