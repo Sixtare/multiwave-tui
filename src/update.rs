@@ -498,6 +498,7 @@ mod tests {
                 Event::AudioDeviceLost,
                 key(KeyCode::Char('o')),
                 key(KeyCode::Down),
+                key(KeyCode::Down),
                 key(KeyCode::Enter),
             ]),
         );
@@ -557,13 +558,28 @@ mod tests {
     }
 
     #[test]
+    fn test_device_popup_opens_on_the_mode_row() {
+        let mut app = App::with_devices(vec!["A".into(), "B".into(), "C".into()], 1);
+        press(&mut app, KeyCode::Char('o'));
+        assert!(app.devices.mode_focused);
+
+        // Down reaches the active device, Up from the mode row the last one.
+        press(&mut app, KeyCode::Down);
+        assert_eq!((app.devices.mode_focused, app.devices.selected), (false, 1));
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Up);
+        assert!(app.devices.mode_focused);
+        press(&mut app, KeyCode::Up);
+        assert_eq!((app.devices.mode_focused, app.devices.selected), (false, 2));
+    }
+
+    #[test]
     fn test_apps_tab_lists_applications_and_picks_one() {
         let mut app = App::with_devices(vec!["A".into()], 0);
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.devices.tab, DeviceTab::Outputs);
 
-        // The cursor goes up to the mode row, where the arrows change the mode.
-        press(&mut app, KeyCode::Up);
+        // The popup opens on the mode row, where the arrows change the mode.
         assert!(app.devices.mode_focused);
         let action = update(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!((action, app.devices.tab), (None, DeviceTab::Outputs));
