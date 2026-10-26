@@ -40,9 +40,7 @@ pub struct FrameState {
     notices: Vec<String>,
     /// Whether a blank column separates the bars.
     bar_gap: bool,
-    /// Whether the line between the bars and their reflection is drawn.
-    divider: bool,
-    /// Whether the reflection below the divider line is drawn.
+    /// Whether the reflection below the bars is drawn.
     mirror: bool,
     palette: Palette,
     /// Manual sensitivity, which sets where the vertical gradient ends.
@@ -85,7 +83,6 @@ impl FrameState {
                 app.visible_notices()
             },
             bar_gap: app.bar_gap,
-            divider: app.divider,
             mirror: app.mirror,
             palette: app.palette,
             gain: app.gain,
@@ -107,7 +104,6 @@ pub fn render(app: &mut App, frame: &mut Frame) {
                 app.gain,
                 SoundwaveParts {
                     gap: app.bar_gap,
-                    divider: app.divider,
                     mirror: app.mirror,
                 },
             );
@@ -414,7 +410,6 @@ fn render_menu(frame: &mut Frame, app: &App) {
         MenuRow::Bars => format!("◀ {} ▶", app.bar_count),
         MenuRow::Smoothing => format!("◀ {} ▶", app.smoothing_text()),
         MenuRow::BarGap => on_off(app.bar_gap),
-        MenuRow::Divider => on_off(app.divider),
         MenuRow::Mirror => on_off(app.mirror),
         MenuRow::Fps => format!("◀ {} ▶", app.fps),
     };
@@ -680,7 +675,7 @@ fn bar_glyph(amplitude: f32, threshold: f32, rows: usize, glyphs: &[char]) -> ch
     }
 }
 
-/// Mirrored spectrum: bars grow upward from a center divider and are reflected below it.
+/// Mirrored spectrum: bars grow upward from the center and are reflected below it.
 ///
 /// Writes cells straight into the buffer. Building a `Paragraph` of styled spans meant one
 /// `String` allocation per cell plus unicode-width measurement for centering, every frame,
@@ -692,9 +687,7 @@ struct Soundwave<'a> {
     peak_height: f32,
     /// Whether a blank column follows each bar's glyph.
     gap: bool,
-    /// Whether the line between the bars and their reflection is drawn.
-    divider: bool,
-    /// Whether the reflection below the divider line is drawn.
+    /// Whether the reflection below the bars is drawn.
     mirror: bool,
 }
 
@@ -704,20 +697,15 @@ impl Widget for Soundwave<'_> {
             return;
         }
 
-        // Reserves 1 line for the center horizon/divider; without it the bars and the reflection
-        // touch.
-        let divider_lines = usize::from(self.divider);
-        let usable_lines = area.height as usize - divider_lines;
-
-        // Complete symmetrical division: no artificial clamp limits.
-        // The divider line is fixed at the exact center of the screen and bars
-        // utilize 100% of the available vertical height (reaching the top and bottom).
+        // Complete symmetrical division: no artificial clamp limits. The bars and the reflection
+        // touch at the exact center of the screen and use 100% of the available vertical height.
+        let usable_lines = area.height as usize;
         let upper_rows = usable_lines / 2;
         let mirror_rows = usable_lines / 2;
-        let content_lines = (upper_rows + divider_lines + mirror_rows) as u16;
+        let content_lines = (upper_rows + mirror_rows) as u16;
         // Vertically centers while filling the entire screen; a spare line goes above.
         let top = area.y + (area.height - content_lines).div_ceil(2);
-        let divider_y = top + upper_rows as u16;
+        let base_y = top + upper_rows as u16;
 
         // Each bar is a glyph, followed by a spacer when the gap is on. The row is centered
         // horizontally; when the terminal is narrower than the row, the treble side is clipped.
@@ -805,7 +793,7 @@ impl Widget for Soundwave<'_> {
             for (row, &row_fade) in upper_fades.iter().enumerate() {
                 let threshold = row as f32 / upper_rows as f32;
                 let glyph = bar_glyph(normalized, threshold, upper_rows, WAVE_CHARS);
-                let y = divider_y - 1 - row as u16;
+                let y = base_y - 1 - row as u16;
                 let color = upper_row_colors
                     .get(row)
                     .copied()
@@ -816,15 +804,7 @@ impl Widget for Soundwave<'_> {
                 }
             }
 
-            // 2. Subtle center divider line (mirror horizon at screen center)
-            if self.divider {
-                set_cell(column, divider_y, '─', Color::DarkGray);
-                if self.gap {
-                    set_cell(column + 1, divider_y, '─', Color::DarkGray);
-                }
-            }
-
-            // 3. Mirror Effect (upside down, grows down towards screen bottom)
+            // 2. Mirror Effect (upside down, grows down towards screen bottom)
             let mirror_rows_shown = if self.mirror { mirror_fades.len() } else { 0 };
             for (row, &row_fade) in mirror_fades.iter().take(mirror_rows_shown).enumerate() {
                 let threshold = row as f32 / mirror_rows as f32;
@@ -834,7 +814,7 @@ impl Widget for Soundwave<'_> {
                     mirror_rows,
                     INVERTED_WAVE_CHARS,
                 );
-                let y = divider_y + divider_lines as u16 + row as u16;
+                let y = base_y + row as u16;
                 let mirror_color = mirror_row_colors
                     .get(row)
                     .copied()
@@ -853,9 +833,7 @@ impl Widget for Soundwave<'_> {
 pub struct SoundwaveParts {
     /// A blank column after each bar.
     pub gap: bool,
-    /// The line between the bars and their reflection.
-    pub divider: bool,
-    /// The reflection below the divider line.
+    /// The reflection below the bars.
     pub mirror: bool,
 }
 
@@ -863,7 +841,6 @@ impl Default for SoundwaveParts {
     fn default() -> Self {
         Self {
             gap: true,
-            divider: true,
             mirror: true,
         }
     }
@@ -885,7 +862,6 @@ pub fn draw_soundwave(
             palette,
             peak_height: loudest_bar_height(gain),
             gap: parts.gap,
-            divider: parts.divider,
             mirror: parts.mirror,
         },
         area,
@@ -932,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn test_soundwave_without_divider_makes_the_bars_and_the_reflection_touch() {
+    fn test_soundwave_bars_and_the_reflection_touch() {
         let bars = vec![1.0; 32];
         let mut terminal = Terminal::new(TestBackend::new(80, 7)).unwrap();
         terminal
@@ -943,16 +919,13 @@ mod tests {
                     &bars,
                     &Palette::default(),
                     1.0,
-                    SoundwaveParts {
-                        divider: false,
-                        ..SoundwaveParts::default()
-                    },
+                    SoundwaveParts::default(),
                 )
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        // Without the line, 3 rows of bars and 3 of reflection sit side by side (a spare row
+        // 3 rows of bars and 3 of reflection sit side by side (a spare row
         // stays above), and nothing in between is a divider.
         assert!((0..80).all(|x| buffer[(x, 0)].symbol() == " "));
         assert_ne!(buffer[(24, 3)].symbol(), " ");
@@ -963,7 +936,7 @@ mod tests {
     #[test]
     fn test_soundwave_without_mirror_leaves_the_lower_half_empty() {
         let bars = vec![1.0; 32];
-        let mut terminal = Terminal::new(TestBackend::new(80, 7)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
         terminal
             .draw(|frame| {
                 draw_soundwave(
@@ -981,17 +954,16 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        // The bars and the divider stay where they were; everything below is blank.
+        // The bars stay where they were; everything below is blank.
         assert_ne!(buffer[(24, 2)].symbol(), " ");
-        assert_eq!(buffer[(24, 3)].symbol(), "─");
-        assert!((4..7).all(|y| (0..80).all(|x| buffer[(x, y)].symbol() == " ")));
+        assert!((3..6).all(|y| (0..80).all(|x| buffer[(x, y)].symbol() == " ")));
     }
 
     #[test]
     fn test_soundwave_without_gap_packs_the_bars_against_each_other() {
         let mut bars = vec![1.0; 32];
         bars[1] = 0.0;
-        let mut terminal = Terminal::new(TestBackend::new(80, 7)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
         terminal
             .draw(|frame| {
                 draw_soundwave(
@@ -1014,9 +986,8 @@ mod tests {
         assert_eq!(buffer[(24, 0)].symbol(), "█");
         assert_eq!(buffer[(25, 0)].symbol(), " ");
         assert_eq!(buffer[(26, 0)].symbol(), "█");
-        assert_eq!(buffer[(24, 3)].symbol(), "─");
-        assert_eq!(buffer[(55, 3)].symbol(), "─");
-        assert_eq!(buffer[(56, 3)].symbol(), " ");
+        assert_eq!(buffer[(55, 0)].symbol(), "█");
+        assert_eq!(buffer[(56, 0)].symbol(), " ");
     }
 
     #[test]
@@ -1025,7 +996,7 @@ mod tests {
             mode: ColorMode::Rainbow,
             ..Palette::default()
         };
-        let buffer = render_bars_with(&[1.0; 32], 80, 7, &palette);
+        let buffer = render_bars_with(&[1.0; 32], 80, 6, &palette);
 
         assert_eq!(buffer[(8, 0)].fg, Color::Rgb(255, 77, 77));
         assert_eq!(buffer[(70, 0)].fg, palette.bar_color(31, 32).color());
@@ -1036,23 +1007,19 @@ mod tests {
     fn test_soundwave_layout() {
         let mut bars = vec![0.0; 32];
         bars[0] = 1.0;
-        let buffer = render_bars(&bars, 80, 7);
+        let buffer = render_bars(&bars, 80, 6);
 
-        // 7 rows: 3 upper, divider, 3 mirror; 64 columns centered in 80.
+        // 6 rows: 3 upper, 3 mirror; 64 columns centered in 80.
         assert_eq!(buffer[(8, 0)].symbol(), "█");
         assert_eq!(buffer[(8, 0)].fg, Color::Rgb(0, 255, 255));
         assert_eq!(buffer[(9, 0)].symbol(), " ");
         assert_eq!(buffer[(10, 0)].symbol(), " ");
-        assert_eq!(buffer[(7, 3)].symbol(), " ");
-        assert_eq!(buffer[(8, 3)].symbol(), "─");
-        assert_eq!(buffer[(71, 3)].symbol(), "─");
-        assert_eq!(buffer[(72, 3)].symbol(), " ");
         // The mirror is attenuated to 0.6, so its last row is partially filled.
-        assert_eq!(buffer[(8, 4)].symbol(), "█");
-        // Next to the divider the reflection is at its dimmest (base fade of the dimmed color).
-        assert_eq!(buffer[(8, 4)].fg, Color::Rgb(0, 53, 53));
-        assert_ne!(buffer[(8, 5)].symbol(), " ");
-        assert_eq!(buffer[(8, 6)].symbol(), " ");
+        assert_eq!(buffer[(8, 3)].symbol(), "█");
+        // Next to the bars the reflection is at its dimmest (base fade of the dimmed color).
+        assert_eq!(buffer[(8, 3)].fg, Color::Rgb(0, 53, 53));
+        assert_ne!(buffer[(8, 4)].symbol(), " ");
+        assert_eq!(buffer[(8, 5)].symbol(), " ");
     }
 
     #[test]
@@ -1061,7 +1028,7 @@ mod tests {
             mode: ColorMode::Gradient,
             ..Palette::default()
         };
-        let buffer = render_bars_with(&[1.0; 32], 40, 7, &gradient);
+        let buffer = render_bars_with(&[1.0; 32], 40, 6, &gradient);
 
         // 40 columns show the first 20 bars; the rest, the treble side, is clipped.
         assert_eq!(buffer[(0, 0)].fg, Color::Rgb(0, 255, 255));
@@ -1090,7 +1057,7 @@ mod tests {
             .map(|(x, y)| buffer[(x, y)].symbol().to_string())
             .collect();
         for expected in [
-            "Output device",
+            "Audio Output",
             "Bar color",
             "Sensitivity",
             "1.00x",
@@ -1451,7 +1418,7 @@ mod tests {
     fn test_gradient_mode_blends_the_colors_across_the_bars() {
         let mut app = App::new();
         app.palette.mode = ColorMode::Gradient;
-        let buffer = render_bars_with(&[1.0; 32], 64, 7, &app.palette);
+        let buffer = render_bars_with(&[1.0; 32], 64, 6, &app.palette);
 
         // Bars are two columns wide: first is the bass color, last the treble color, and no two
         // neighbouring bars share a color.
@@ -1460,8 +1427,8 @@ mod tests {
         let colors: Vec<Color> = (0..32).map(|bar| buffer[(bar * 2, 0)].fg).collect();
         assert!(colors.windows(2).all(|pair| pair[0] != pair[1]));
         // The mirror is the same blend, darker.
-        assert_eq!(buffer[(0, 4)].fg, Color::Rgb(0, 53, 53));
-        assert_ne!(buffer[(20, 4)].fg, buffer[(22, 4)].fg);
+        assert_eq!(buffer[(0, 3)].fg, Color::Rgb(0, 53, 53));
+        assert_ne!(buffer[(20, 3)].fg, buffer[(22, 3)].fg);
     }
 
     #[test]
@@ -1475,13 +1442,13 @@ mod tests {
             ],
             ..Palette::default()
         };
-        // 11 rows: 5 above the divider, the divider, 5 in the mirror.
-        let buffer = render_bars_with(&[1.0; 32], 64, 11, &palette);
+        // 10 rows: 5 above the center, 5 in the mirror.
+        let buffer = render_bars_with(&[1.0; 32], 64, 10, &palette);
 
         let column = |bar: u16, rows: std::ops::Range<u16>| -> Vec<Color> {
             rows.map(|y| buffer[(bar * 2, y)].fg).collect()
         };
-        // Top to bottom above the divider (row 5). The gradient ends at the height the loudest
+        // Top to bottom above the center (row 5). The gradient ends at the height the loudest
         // bars reach (0.75), so the top two rows already show the final color.
         let upper = column(0, 0..5);
         assert_eq!(upper[0], Color::Rgb(0, 0, 255));
@@ -1496,7 +1463,7 @@ mod tests {
         assert_eq!(column(0, 0..5), column(31, 0..5));
         // The mirror repeats the blend going down, darker, and ends sooner since it is
         // attenuated.
-        let mirror = column(0, 6..11);
+        let mirror = column(0, 5..10);
         assert_eq!(mirror[0], Color::Rgb(53, 0, 0));
         assert_eq!(mirror[3], Color::Rgb(0, 0, 89));
         assert_eq!(mirror[4], Color::Rgb(0, 0, 89));
@@ -1516,7 +1483,7 @@ mod tests {
         let peak = loudest_bar_height(1.0);
         let buffer = render_bars_with(&[peak; 32], 64, 41, &palette);
 
-        // 20 rows above the divider; the bar's topmost visible cell is the final color.
+        // 20 rows above the center; the bar's topmost visible cell is the final color.
         let top_cell = (0..20)
             .map(|y| &buffer[(0, y)])
             .find(|cell| cell.symbol() != " ")
