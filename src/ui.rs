@@ -14,6 +14,7 @@ use crate::{
     app::{App, COLUMNS_PER_BAR, COLUMNS_PER_BAR_TIGHT, Overlay},
     audio_processor::loudest_bar_height,
     color_picker::{ColorPicker, HUE_ROWS, PickerFocus, SQUARE_COLS, SQUARE_ROWS},
+    color_session::ColorSession,
     device_menu::{DeviceMenu, DeviceTab},
     menu::MenuRow,
     palette::{BarColor, Palette},
@@ -186,7 +187,7 @@ const WAVE_CHARS: &[char] = &[' ', '▂', '▃', '▄', '▅', '▆', '▇', '�
 const INVERTED_WAVE_CHARS: &[char] = &[' ', '▔', '▀', '█'];
 
 /// Rows of devices the popup shows at once, which sets its fixed height.
-const DEVICE_POPUP_ROWS: u16 = 7;
+const DEVICE_POPUP_ROWS: u16 = 9;
 /// The tag after the active row's name.
 const ACTIVE_TAG: &str = " [Active]";
 /// Columns before a row's name: the cursor.
@@ -352,8 +353,11 @@ const MENU_WIDTH: u16 = 34;
 /// Width of the box beside the main menu that lists its shortcuts.
 const SHORTCUTS_WIDTH: u16 = 13;
 const POPUP_WIDTH: u16 = MENU_WIDTH;
-/// Height of the main menu box, which the color popup and the device popup share.
-const MENU_HEIGHT: u16 = MenuRow::ALL.len() as u16 + 2;
+/// Index of the menu row that a blank line follows (Bar style).
+const MENU_GAP_AFTER: usize = 1;
+/// Height of the main menu box, which the color popup and the device popup share: tall enough
+/// for the Bar style popup (its rows and borders), which has the most lines.
+const MENU_HEIGHT: u16 = 12;
 /// Width of the color picker box beside the color popup: the square, a gap, the hue strip and
 /// its marker, plus the borders.
 const PICKER_WIDTH: u16 = SQUARE_COLS as u16 + 1 + 2 + 1 + 2;
@@ -402,7 +406,6 @@ fn render_menu(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, menu_area);
     frame.render_widget(block, menu_area);
 
-    let on_off = |on: bool| format!("◀ {} ▶", if on { "on" } else { "off" });
     // Columns left for a value after the cursor and the label.
     let value_width = (inner.width as usize).saturating_sub(2 + 14);
     let value = |row: MenuRow| match row {
@@ -411,12 +414,9 @@ fn render_menu(frame: &mut Frame, app: &App) {
         MenuRow::Sensitivity => format!("◀ {:.2}x ▶", app.gain),
         MenuRow::Bars => format!("◀ {} ▶", app.bar_count),
         MenuRow::Smoothing => format!("◀ {} ▶", app.smoothing_text()),
-        MenuRow::BarGap => on_off(app.bar_gap),
-        MenuRow::Mirror => on_off(app.mirror),
         MenuRow::Fps => format!("◀ {} ▶", app.fps),
-        MenuRow::Render => format!("◀ {} ▶", app.render_mode.label()),
     };
-    let lines: Vec<Line> = MenuRow::ALL
+    let mut lines: Vec<Line> = MenuRow::ALL
         .iter()
         .map(|&row| {
             let selected = row == app.menu_row;
@@ -440,6 +440,8 @@ fn render_menu(frame: &mut Frame, app: &App) {
             }
         })
         .collect();
+    // A blank line sets the Bar style row apart from the options below it.
+    lines.insert(MENU_GAP_AFTER + 1, Line::default());
     frame.render_widget(Paragraph::new(lines), inner);
 
     if shortcuts_area.width < 3 {
@@ -452,10 +454,11 @@ fn render_menu(frame: &mut Frame, app: &App) {
     let inner = block.inner(shortcuts_area);
     frame.render_widget(Clear, shortcuts_area);
     frame.render_widget(block, shortcuts_area);
-    let lines: Vec<Line> = MenuRow::ALL
+    let mut lines: Vec<Line> = MenuRow::ALL
         .iter()
         .map(|row| Line::from(row.shortcut()).centered())
         .collect();
+    lines.insert(MENU_GAP_AFTER + 1, Line::default());
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -471,13 +474,19 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
     } else {
         0
     };
-    let (popup_area, _) = menu_layout(area, POPUP_WIDTH, picker_width, height);
+    // The shortcuts box takes the side slot until the color picker needs it.
+    let side_width = if app.color.picker.is_some() {
+        picker_width
+    } else {
+        SHORTCUTS_WIDTH
+    };
+    let (popup_area, shortcuts_area) = menu_layout(area, POPUP_WIDTH, side_width, height);
     if popup_area.width < 3 || popup_area.height < 3 {
         return;
     }
 
     let block = Block::bordered()
-        .title(" Bar Colors ")
+        .title(" Bar Style ")
         .title_alignment(Alignment::Center)
         .title_bottom(Line::from(" ←→ mode  Enter pick  Esc close ").centered())
         .border_type(BorderType::Rounded);
@@ -521,11 +530,59 @@ fn render_color_popup(frame: &mut Frame, app: &App) {
         })
         .collect();
     lines.insert(Palette::FADE_ROW, Line::default());
+    let on_off = |on: bool| if on { "on" } else { "off" };
+    let toggles = [
+        (ColorSession::RENDER_ROW, "Render", app.render_mode.label()),
+        (ColorSession::GAP_ROW, "Bar gap", on_off(app.bar_gap)),
+        (ColorSession::MIRROR_ROW, "Mirror", on_off(app.mirror)),
+    ];
+    for (row, label, value) in toggles {
+        let selected = app.color.row == row;
+        let style = if selected {
+            Style::default().fg(Color::Cyan).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(Span::styled(
+            format!(
+                "{} {:<9}◀ {} ▶",
+                if selected { ">" } else { " " },
+                label,
+                value
+            ),
+            style,
+        )));
+    }
     frame.render_widget(Paragraph::new(lines), inner);
 
     if let Some(picker) = &app.color.picker {
         render_color_picker(frame, popup_area, picker);
+    } else if shortcuts_area.width >= 3 {
+        render_popup_shortcuts(frame, shortcuts_area);
     }
+}
+
+/// Keys that reach the popup's toggles directly, from the line of the first one down.
+const POPUP_SHORTCUTS: [&str; 3] = ["R", "G", "M"];
+
+/// Draws the `Shortcuts` box beside the Bar style popup, with each key on the line of its option.
+fn render_popup_shortcuts(frame: &mut Frame, area: Rect) {
+    let block = Block::bordered()
+        .title(" Shortcuts ")
+        .title_alignment(Alignment::Center)
+        .border_type(BorderType::Rounded);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    // The color rows and the blank line before the fade row have no shortcut; the fade row
+    // has none either.
+    let mut lines = vec![Line::default(); Palette::ROWS + 1];
+    lines.extend(
+        POPUP_SHORTCUTS
+            .iter()
+            .map(|&key| Line::from(key).centered()),
+    );
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// Draws the color picker to the right of `popup_area`, or over its right edge when the terminal
@@ -1144,7 +1201,7 @@ mod tests {
             .collect();
         for expected in [
             "Audio Output",
-            "Bar color",
+            "Bar style",
             "Sensitivity",
             "1.00x",
             "Bars",
@@ -1158,6 +1215,26 @@ mod tests {
             FrameState::capture(&app, SIZE),
             FrameState::capture(&App::new(), SIZE)
         );
+    }
+
+    #[test]
+    fn test_menu_leaves_a_blank_line_after_bar_style() {
+        let mut app = App::new();
+        app.open_menu();
+        let mut terminal = Terminal::new(TestBackend::new(60, 14)).unwrap();
+        terminal.draw(|frame| render(&mut app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let row_text = |y: u16| -> String {
+            (0..60)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect()
+        };
+        let find = |needle: &str| (0..14).find(|&y| row_text(y).contains(needle)).unwrap();
+        let style = find("Bar style");
+        assert_eq!(find("Sensitivity"), style + 2);
+        // The shortcuts box keeps the same rows: C beside Bar style, ↑/↓ beside Sensitivity.
+        assert!(row_text(style).contains(" C "));
+        assert!(row_text(style + 2).contains("↑/↓"));
     }
 
     #[test]
@@ -1297,7 +1374,8 @@ mod tests {
             .flat_map(|y| (0..80).map(move |x| (x, y)))
             .map(|(x, y)| buffer[(x, y)].symbol().to_string())
             .collect();
-        assert!(text.contains("Bar Colors"));
+        assert!(text.contains("Bar Style"));
+        assert!(text.contains("Render") && text.contains("blocks"));
         assert!(text.contains("Single color"));
         // Bars outside the popup already use the previewed single color.
         assert_eq!(buffer[(8, 1)].fg, Color::Rgb(0, 255, 255));
@@ -1405,8 +1483,8 @@ mod tests {
         let mut many = App::with_devices((0..20).map(|i| format!("Device {i}")).collect(), 0);
         few.open_device_popup();
         many.open_device_popup();
-        assert_eq!(popup_box(&mut few), (MENU_WIDTH + SHORTCUTS_WIDTH, 10));
-        assert_eq!(popup_box(&mut many), (MENU_WIDTH + SHORTCUTS_WIDTH, 10));
+        assert_eq!(popup_box(&mut few), (MENU_WIDTH + SHORTCUTS_WIDTH, 12));
+        assert_eq!(popup_box(&mut many), (MENU_WIDTH + SHORTCUTS_WIDTH, 12));
 
         let mut app = App::with_devices(vec![long.clone()], 0);
         app.open_device_popup();
@@ -1613,6 +1691,38 @@ mod tests {
         let usual = loudest_bar_height(1.0);
         assert_eq!(top_color(usual, 1.0), final_color);
         assert_ne!(top_color(usual, 2.0), final_color);
+    }
+
+    #[test]
+    fn test_bar_style_popup_lists_shortcuts_until_the_color_picker_opens() {
+        let mut app = App::new();
+        app.open_color_popup();
+        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
+        let mut screen = |app: &mut App| -> Vec<String> {
+            terminal.draw(|frame| render(app, frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..14)
+                .map(|y| {
+                    (0..100)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect()
+                })
+                .collect()
+        };
+        let rows = screen(&mut app);
+        let line = |needle: &str| rows.iter().position(|r| r.contains(needle)).unwrap();
+        assert!(rows.iter().any(|r| r.contains("Shortcuts")));
+        // Each key sits beside its option.
+        assert!(rows[line("Render")].contains(" R "));
+        assert!(rows[line("Bar gap")].contains(" G "));
+        assert!(rows[line("Mirror")].contains(" M "));
+
+        // The picker takes the side slot, so the box goes away.
+        app.color.select_next(&app.palette);
+        app.color.activate(&mut app.palette);
+        assert!(app.color.picker.is_some());
+        let rows = screen(&mut app);
+        assert!(!rows.iter().any(|r| r.contains("Shortcuts")));
     }
 
     #[test]
