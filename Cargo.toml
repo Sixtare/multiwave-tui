@@ -9,3 +9,7 @@ crossterm = "0.29.0"
 ratatui = "0.30.2"
 cpal = "0.17"  # Ou a versão mais recente
 realfft = "3.3" # Para fazer a conversão rápida de tempo -> frequência
+
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.26"
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
