@@ -26,7 +26,7 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameState {
     size: Size,
-    /// Displayed bars; left empty while the popup hides the visualizer.
+    /// Displayed bars.
     bars: Vec<f32>,
     overlay: Overlay,
     menu_row: MenuRow,
@@ -57,11 +57,7 @@ impl FrameState {
         let devices_open = app.overlay == Overlay::Devices;
         Self {
             size,
-            bars: if devices_open {
-                Vec::new()
-            } else {
-                app.motion.bars().to_vec()
-            },
+            bars: app.motion.bars().to_vec(),
             overlay: app.overlay,
             menu_row: app.menu_row,
             menu_device: if app.overlay == Overlay::Menu {
@@ -97,29 +93,24 @@ impl FrameState {
 
 pub fn render(app: &mut App, frame: &mut Frame) {
     let devices_open = app.overlay == Overlay::Devices;
-    match devices_open {
-        false => {
-            draw_soundwave(
-                frame,
-                frame.area(),
-                app.motion.bars(),
-                &app.palette,
-                app.gain,
-                SoundwaveParts {
-                    gap: app.bar_gap,
-                    divider: app.divider,
-                    mirror: app.mirror,
-                },
-            );
-            if app.overlay == Overlay::Menu {
-                render_menu(frame, app);
-            }
-            if app.overlay == Overlay::Colors {
-                render_color_popup(frame, app);
-            }
-        }
-        // Uses the full screen, centering the visualizer vertically and horizontally
-        true => render_popup(frame, app),
+    draw_soundwave(
+        frame,
+        frame.area(),
+        app.motion.bars(),
+        &app.palette,
+        app.gain,
+        SoundwaveParts {
+            gap: app.bar_gap,
+            divider: app.divider,
+            mirror: app.mirror,
+        },
+    );
+    match app.overlay {
+        Overlay::Menu => render_menu(frame, app),
+        Overlay::Colors => render_color_popup(frame, app),
+        // Cleared only where the box sits, so the bars keep moving around it.
+        Overlay::Devices => render_popup(frame, app),
+        Overlay::None => {}
     }
 
     // Notices stack down the top-right corner, so changing both settings at once shows both.
@@ -1599,7 +1590,7 @@ mod tests {
     }
 
     #[test]
-    fn test_frame_state_ignores_bars_behind_popup() {
+    fn test_frame_state_follows_bars_behind_popup() {
         let mut app = App::new();
         app.overlay = Overlay::Devices;
         let before = FrameState::capture(&app, SIZE);
@@ -1608,6 +1599,6 @@ mod tests {
 
         app.tick();
 
-        assert_eq!(before, FrameState::capture(&app, SIZE));
+        assert_ne!(before, FrameState::capture(&app, SIZE));
     }
 }

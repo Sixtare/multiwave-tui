@@ -507,7 +507,9 @@ impl App {
     pub fn open_device_popup(&mut self) {
         self.return_to_menu = self.overlay == Overlay::Menu;
         self.devices.tab = DeviceTab::Outputs;
-        self.devices.mode_focused = false;
+        // Opens on the mode row; Down from there reaches the active device.
+        self.devices.selected = self.devices.active;
+        self.devices.mode_focused = true;
         self.overlay = Overlay::Devices;
     }
 

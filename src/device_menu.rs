@@ -132,7 +132,8 @@ impl DeviceMenu {
         self.apps.active = active;
     }
 
-    /// Moves the cursor down: through the list, then to the mode row, then back to the top.
+    /// Moves the cursor down: through the list, then to the mode row, then back to the top. From
+    /// the mode row it goes to the row the list cursor was left on.
     pub fn select_next(&mut self) {
         let focused = self.mode_focused;
         let (len, selected) = match self.tab {
@@ -140,9 +141,10 @@ impl DeviceMenu {
             DeviceTab::Apps => (self.apps.names.len(), &mut self.apps.selected),
         };
         if focused {
-            *selected = 0;
+            *selected = (*selected).min(len.saturating_sub(1));
             self.mode_focused = len == 0;
         } else if *selected + 1 >= len {
+            *selected = 0;
             self.mode_focused = true;
         } else {
             *selected += 1;
