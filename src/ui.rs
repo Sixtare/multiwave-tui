@@ -704,15 +704,17 @@ impl Widget for Soundwave<'_> {
             return;
         }
 
-        // Reserves 1 line for the center horizon/divider
-        let usable_lines = (area.height - 1) as usize;
+        // Reserves 1 line for the center horizon/divider; without it the bars and the reflection
+        // touch.
+        let divider_lines = usize::from(self.divider);
+        let usable_lines = area.height as usize - divider_lines;
 
         // Complete symmetrical division: no artificial clamp limits.
         // The divider line is fixed at the exact center of the screen and bars
         // utilize 100% of the available vertical height (reaching the top and bottom).
         let upper_rows = usable_lines / 2;
         let mirror_rows = usable_lines / 2;
-        let content_lines = (upper_rows + 1 + mirror_rows) as u16;
+        let content_lines = (upper_rows + divider_lines + mirror_rows) as u16;
         // Vertically centers while filling the entire screen; a spare line goes above.
         let top = area.y + (area.height - content_lines).div_ceil(2);
         let divider_y = top + upper_rows as u16;
@@ -832,7 +834,7 @@ impl Widget for Soundwave<'_> {
                     mirror_rows,
                     INVERTED_WAVE_CHARS,
                 );
-                let y = divider_y + 1 + row as u16;
+                let y = divider_y + divider_lines as u16 + row as u16;
                 let mirror_color = mirror_row_colors
                     .get(row)
                     .copied()
@@ -930,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    fn test_soundwave_without_divider_leaves_its_row_empty() {
+    fn test_soundwave_without_divider_makes_the_bars_and_the_reflection_touch() {
         let bars = vec![1.0; 32];
         let mut terminal = Terminal::new(TestBackend::new(80, 7)).unwrap();
         terminal
@@ -950,9 +952,12 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert!((0..80).all(|x| buffer[(x, 3)].symbol() == " "));
-        // The reflection stays where it was.
-        assert_ne!(buffer[(16, 4)].symbol(), " ");
+        // Without the line, 3 rows of bars and 3 of reflection sit side by side (a spare row
+        // stays above), and nothing in between is a divider.
+        assert!((0..80).all(|x| buffer[(x, 0)].symbol() == " "));
+        assert_ne!(buffer[(24, 3)].symbol(), " ");
+        assert_ne!(buffer[(24, 4)].symbol(), " ");
+        assert!((0..7).all(|y| (0..80).all(|x| buffer[(x, y)].symbol() != "─")));
     }
 
     #[test]
