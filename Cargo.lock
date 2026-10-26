@@ -932,6 +932,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "multiwave-tui"
+version = "0.1.0"
+dependencies = [
+ "color-eyre",
+ "cpal",
+ "crossterm",
+ "ratatui",
+ "realfft",
+ "sysinfo",
+ "wasapi",
+]
+
+[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1492,19 +1505,6 @@ dependencies = [
  "unicode-segmentation",
  "unicode-truncate",
  "unicode-width",
-]
-
-[[package]]
-name = "ratatui-counter-app"
-version = "0.1.0"
-dependencies = [
- "color-eyre",
- "cpal",
- "crossterm",
- "ratatui",
- "realfft",
- "sysinfo",
- "wasapi",
 ]
 
 [[package]]

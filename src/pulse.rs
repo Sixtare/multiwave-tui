@@ -261,7 +261,7 @@ impl PulseCapture {
             .args(["--format=float32le", "--latency-msec=20"])
             .arg(format!("--rate={}", source.rate))
             .arg(format!("--channels={}", source.channels))
-            .arg("--client-name=ratatui-audio-visualizer")
+            .arg("--client-name=multiwave-tui")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
