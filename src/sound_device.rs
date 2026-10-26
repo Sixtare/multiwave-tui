@@ -39,6 +39,19 @@ enum Capture {
     Process(ProcessCapture),
 }
 
+/// Stops a replaced capture. A `parec` capture is silenced here and then waited for on another
+/// thread, so switching never freezes the UI loop while the old process exits; a cpal stream is
+/// not `Send` and is dropped in place.
+fn retire_capture(old: Option<Capture>) {
+    match old {
+        Some(Capture::Pulse(pulse)) => {
+            pulse.silence();
+            std::thread::spawn(move || drop(pulse));
+        }
+        other => drop(other),
+    }
+}
+
 struct DeviceEntry {
     name: String,
     key: String,
@@ -340,7 +353,7 @@ impl SoundDevice {
 
         // Replace the old capture only after the new one is running. If the switch fails, the
         // previous capture keeps running instead of leaving the app silent.
-        self._capture = Some(capture);
+        retire_capture(self._capture.replace(capture));
 
         // Only commit the new device state after the capture starts successfully, so a failed
         // switch does not leave the UI pointing at a device that is not actually capturing.
@@ -380,7 +393,7 @@ impl SoundDevice {
                 color_eyre::eyre::eyre!("Application index out of range: {index}")
             })?;
         let (capture, device_info) = start_app_capture(&app, Arc::clone(&self.settings), sender)?;
-        self._capture = Some(capture);
+        retire_capture(self._capture.replace(capture));
         self.name = app.label.clone();
         self.info = device_info;
         self.captured_app = Some(app);

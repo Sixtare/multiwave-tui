@@ -291,6 +291,9 @@ impl PulseCapture {
                         .map(|b| f32::from_le_bytes(*b)),
                 );
                 pending.drain(..usable);
+                if reader_stopped.load(Ordering::Relaxed) {
+                    break;
+                }
                 if !samples.is_empty() {
                     on_samples(&samples);
                 }
@@ -305,6 +308,14 @@ impl PulseCapture {
             stopped,
             reader: Some(reader),
         })
+    }
+}
+
+impl PulseCapture {
+    /// Stops it from delivering samples or reporting its end, without waiting for `parec` to
+    /// exit. Dropping it afterwards (which does wait) can then happen on another thread.
+    pub fn silence(&self) {
+        self.stopped.store(true, Ordering::Relaxed);
     }
 }
 
