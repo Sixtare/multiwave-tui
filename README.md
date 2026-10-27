@@ -58,3 +58,7 @@ cargo fmt --check && cargo clippy --all-targets && cargo test --lib -- --skip te
 ```
 
 The skipped test needs a real audio output device; drop the `--skip` on a machine that has one.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
