@@ -2,7 +2,7 @@
 
 A terminal audio visualizer written in Rust. It captures whatever your system is playing, computes a spectrum and draws it right in the terminal, built with [ratatui](https://ratatui.rs).
 
-<video src="https://github.com/user-attachments/assets/7141ff78-5363-49f3-b749-9905f9e704f7" controls muted></video>
+https://github.com/user-attachments/assets/7141ff78-5363-49f3-b749-9905f9e704f7
 
 ## Features
 
