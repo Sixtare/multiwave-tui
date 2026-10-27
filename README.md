@@ -2,6 +2,8 @@
 
 A terminal audio visualizer written in Rust. It captures whatever your system is playing (not the microphone), computes a spectrum and draws it as mirrored, log-spaced bars right in the terminal, built with [ratatui](https://ratatui.rs).
 
+https://github.com/user-attachments/assets/7141ff78-5363-49f3-b749-9905f9e704f7
+
 ## Features
 
 - **System audio capture**: records the output sink monitor on Linux (PulseAudio/PipeWire) and WASAPI loopback on Windows.
